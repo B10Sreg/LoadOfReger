@@ -152,7 +152,7 @@ func (a *App) pageStyle() *adw.PreferencesPage {
 	fontRow.SetTitle("Шрифт бара")
 	fontRow.SetSubtitle(a.cfg.Style.Font)
 	btn := gtk.NewFontDialogButton(gtk.NewFontDialog())
-	btn.SetValign(gtk.AlignCenter)
+	btn.SetVAlign(gtk.AlignCenter)
 	btn.SetFontDesc(pangoDescFromString(a.cfg.Style.Font))
 	btn.Connect("notify::font-desc", func() {
 		d := btn.FontDesc()
@@ -182,7 +182,7 @@ func (a *App) pageStyle() *adw.PreferencesPage {
 	reset := adw.NewActionRow()
 	reset.SetTitle("Сбросить всё на значения по умолчанию")
 	rb := gtk.NewButtonWithLabel("Сбросить")
-	rb.SetValign(gtk.AlignCenter)
+	rb.SetVAlign(gtk.AlignCenter)
 	rb.AddCSSClass("destructive-action")
 	rb.ConnectClicked(a.confirmReset)
 	reset.AddSuffix(rb)
@@ -303,7 +303,7 @@ func (a *App) color(title, subtitle string, field *string) *adw.ActionRow {
 	dlg := gtk.NewColorDialog()
 	dlg.SetWithAlpha(true)
 	btn := gtk.NewColorDialogButton(dlg)
-	btn.SetValign(gtk.AlignCenter)
+	btn.SetVAlign(gtk.AlignCenter)
 	btn.SetRGBA(hexToRGBA(*field))
 	btn.Connect("notify::rgba", func() {
 		hex := rgbaToHex(btn.RGBA())

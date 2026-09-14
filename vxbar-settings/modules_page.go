@@ -82,7 +82,7 @@ func (a *App) fillZone(z *zone, all []*zone, rebuild func()) {
 		row.SetSubtitle(id)
 
 		box := gtk.NewBox(gtk.OrientationHorizontal, 4)
-		box.SetValign(gtk.AlignCenter)
+		box.SetVAlign(gtk.AlignCenter)
 
 		up := gtk.NewButtonFromIconName("go-up-symbolic")
 		up.SetTooltipText("Выше")
@@ -140,7 +140,7 @@ func (a *App) fillZone(z *zone, all []*zone, rebuild func()) {
 		btn := gtk.NewMenuButton()
 		btn.SetIconName("list-add-symbolic")
 		btn.AddCSSClass("flat")
-		btn.SetValign(gtk.AlignCenter)
+		btn.SetVAlign(gtk.AlignCenter)
 		btn.SetPopover(a.addPopover(z, free, rebuild))
 		addRow.AddSuffix(btn)
 		addRow.SetActivatableWidget(btn)

@@ -29,9 +29,10 @@ func hexToRGBA(s string) *gdk.RGBA {
 			r, g, b, a = rr, gg, bb, aa
 		}
 	}
-	return gdk.NewRGBA(
+	c := gdk.NewRGBA(
 		float32(r)/255, float32(g)/255, float32(b)/255, float32(a)/255,
 	)
+	return &c
 }
 
 // rgbaToHex опускает альфу, когда она полная: чистый #rrggbb читается в

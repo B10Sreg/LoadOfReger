@@ -16,7 +16,10 @@ mv "$BIN/.vxbar.new" "$BIN/vxbar"
 
 if pkill -x vxbar; then
 	sleep 0.3
-	"$BIN/vxbar" &
+	# Без перенаправления бар держит унаследованные stdout/stderr открытыми,
+	# и вызывающий скрипт (или пайп вроде "install.sh | tail") висит до его
+	# завершения.
+	"$BIN/vxbar" >/dev/null 2>&1 &
 	disown
 	echo "vxbar установлен в $BIN/vxbar и перезапущен."
 else

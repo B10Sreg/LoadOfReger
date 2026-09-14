@@ -80,6 +80,9 @@ func (a *App) fillZone(z *zone, all []*zone, rebuild func()) {
 		row := adw.NewActionRow()
 		row.SetTitle(moduleTitle(id))
 		row.SetSubtitle(id)
+		// По этому классу style.go находит строки модулей: подзаголовок здесь
+		// -- идентификатор из TOML, и его рисуем моноширинным.
+		row.AddCSSClass("vxbar-module")
 
 		box := gtk.NewBox(gtk.OrientationHorizontal, 4)
 		box.SetVAlign(gtk.AlignCenter)

@@ -25,11 +25,16 @@ type App struct {
 	win *adw.PreferencesWindow
 
 	pendingID glib.SourceHandle
-	// Пока идёт загрузка значений в виджеты, их сигналы менять конфиг не должны.
-	loading bool
+	style     *styler
 }
 
 func main() {
+	// В сессии выставлен GTK_THEME=Arc-Dark, а тема GTK4 у Arc неполная: её
+	// gtk.css не подхватывается, и строки libadwaita остаются без отступов --
+	// подписи наезжают на спинбоксы. Приложение на libadwaita и так рисуется
+	// своим стилем, поэтому просто снимаем переменную до инициализации GTK.
+	os.Unsetenv("GTK_THEME")
+
 	app := adw.NewApplication("dev.reg.vxbar.Settings", gio.ApplicationFlagsNone)
 	a := &App{path: ConfigPath()}
 
@@ -49,6 +54,11 @@ func main() {
 }
 
 func (a *App) build(loadErr error) {
+	if a.style == nil {
+		a.style = newStyler()
+	}
+	a.style.apply(a.cfg)
+
 	a.win = adw.NewPreferencesWindow()
 	a.win.SetApplication(&a.app.Application)
 	a.win.SetTitle("Настройки vxbar")
@@ -58,7 +68,15 @@ func (a *App) build(loadErr error) {
 	a.win.Add(a.pageBar())
 	a.win.Add(a.pageStyle())
 	a.win.Add(a.pageTags())
+	a.win.Add(a.pageClock())
 	a.win.Add(a.pageModules())
+
+	// Правка, сделанная за миг до закрытия, иначе терялась: таймер на 180 мс
+	// не успевал сработать и умирал вместе с циклом событий.
+	a.win.ConnectCloseRequest(func() bool {
+		a.flush()
+		return false
+	})
 
 	a.win.Present()
 
@@ -239,8 +257,19 @@ func (a *App) pageTags() *adw.PreferencesPage {
 	gb.Add(hint)
 	page.Add(gb)
 
+	return page
+}
+
+// Часы жили на странице тегов -- по недосмотру: с тегами их роднит только то,
+// что оба модуля рисует бар.
+func (a *App) pageClock() *adw.PreferencesPage {
+	page := adw.NewPreferencesPage()
+	page.SetTitle("Часы")
+	page.SetIconName("preferences-system-time-symbolic")
+
 	gc := adw.NewPreferencesGroup()
-	gc.SetTitle("Часы")
+	gc.SetTitle("Отображение")
+	gc.SetDescription("Формат strftime: %H:%M -- часы и минуты, %a %d %b -- день недели и дата")
 
 	fmtRow := adw.NewEntryRow()
 	fmtRow.SetTitle("Формат (strftime)")
@@ -316,10 +345,10 @@ func (a *App) color(title, subtitle string, field *string) *adw.ActionRow {
 
 // edit применяет правку к конфигу и ставит отложенное сохранение.
 func (a *App) edit(mutate func()) {
-	if a.loading {
-		return
-	}
 	mutate()
+	// Окно перекрашивается сразу, а файл пишется с задержкой: цвет должен
+	// отзываться на глаз мгновенно, бару же лишние SIGUSR1 ни к чему.
+	a.style.apply(a.cfg)
 	a.scheduleApply()
 }
 
@@ -332,6 +361,16 @@ func (a *App) scheduleApply() {
 		a.applyNow()
 		return false
 	})
+}
+
+// flush досрочно выполняет отложенное сохранение, если оно было назначено.
+func (a *App) flush() {
+	if a.pendingID == 0 {
+		return
+	}
+	glib.SourceRemove(a.pendingID)
+	a.pendingID = 0
+	a.applyNow()
 }
 
 func (a *App) applyNow() {

@@ -66,6 +66,7 @@ fn main() {
     let xfd = unsafe { xlib::XConnectionNumber(xh.dpy) };
     // Окно, на свойства которого мы сейчас подписаны ради заголовка.
     let mut watched: xlib::Window = 0;
+    let mut keeper = GeometryKeeper::default();
     let mut last_tick = Instant::now() - Duration::from_secs(60);
     let mut dirty = true;
 
@@ -121,7 +122,7 @@ fn main() {
         while unsafe { xlib::XPending(xh.dpy) } > 0 {
             let mut ev: xlib::XEvent = unsafe { std::mem::zeroed() };
             unsafe { xlib::XNextEvent(xh.dpy, &mut ev) };
-            if handle_event(&ev, &xh, &cfg, &rend, &mut vol) {
+            if handle_event(&ev, &xh, &cfg, &rend, &mut vol, &mut keeper) {
                 dirty = true;
             }
         }
@@ -145,12 +146,72 @@ fn wait_fd(fd: c_int, dur: Duration) {
 }
 
 /// Возвращает true, если бар надо перерисовать.
+/// Сколько раз подряд бар возвращает себя на место, прежде чем сдаться.
+/// Одиночный перетаск мышью -- это одна-две поправки; сотни подряд означают,
+/// что бар воюет с WM, который тайлит его как обычное окно. В такой войне
+/// выиграть нельзя, а мигать окнами она будет бесконечно.
+const MAX_FIXES: u32 = 8;
+const FIX_WINDOW: Duration = Duration::from_secs(2);
+const BACKOFF: Duration = Duration::from_secs(30);
+
+struct GeometryKeeper {
+    fixes: u32,
+    since: Instant,
+    quiet_until: Option<Instant>,
+    warned: bool,
+}
+
+impl Default for GeometryKeeper {
+    fn default() -> Self {
+        Self {
+            fixes: 0,
+            since: Instant::now(),
+            quiet_until: None,
+            warned: false,
+        }
+    }
+}
+
+impl GeometryKeeper {
+    fn keep(&mut self, xh: &x::X) {
+        if let Some(t) = self.quiet_until {
+            if Instant::now() < t {
+                return;
+            }
+            self.quiet_until = None;
+            self.fixes = 0;
+            self.since = Instant::now();
+        }
+        if !xh.enforce_geometry() {
+            return;
+        }
+        if self.since.elapsed() > FIX_WINDOW {
+            self.fixes = 0;
+            self.since = Instant::now();
+        }
+        self.fixes += 1;
+        if self.fixes <= MAX_FIXES {
+            return;
+        }
+        self.quiet_until = Some(Instant::now() + BACKOFF);
+        if !self.warned {
+            self.warned = true;
+            eprintln!(
+                "vxbar: окно бара двигает WM -- похоже, он не знает про \
+                 _NET_WM_WINDOW_TYPE_DOCK и тайлит бар как обычное окно; \
+                 перестаю возвращать его на место"
+            );
+        }
+    }
+}
+
 fn handle_event(
     ev: &xlib::XEvent,
     xh: &x::X,
     cfg: &Config,
     rend: &Renderer,
     vol: &mut modules::VolumeCache,
+    keeper: &mut GeometryKeeper,
 ) -> bool {
     unsafe {
         match ev.get_type() {
@@ -163,7 +224,7 @@ fn handle_event(
                 // Бар -- док, его никто не должен двигать. WM без поддержки
                 // доков тащит его как обычное окно: возвращаем на место и
                 // перерисовываем, потому что размер мог измениться.
-                xh.enforce_geometry();
+                keeper.keep(xh);
                 true
             }
             xlib::PropertyNotify => {

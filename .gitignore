@@ -6,3 +6,6 @@ target/
 *.bak
 *.o
 *.swp
+
+# Собранный бинарь приложения настроек
+vxbar-settings/vxbar-settings

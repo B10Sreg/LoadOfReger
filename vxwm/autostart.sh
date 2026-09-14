@@ -19,6 +19,10 @@ picom -b --config "$HOME/.config/picom/picom.conf" &
 pkill -x dunst
 dunst &
 
-# 4. Статус-бар (громкость, дата/время)
+# 4. Бар. vxbar рисует всё сам (теги, заголовок, cpu/ram/громкость/часы) и
+# резервирует место через _NET_WM_STRUT_PARTIAL, поэтому встроенный бар vxwm
+# выключен (showbar = 0 в config.h). Старый statusbar.sh больше не нужен:
+# он писал строку в имя root-окна, а vxbar читает свойства напрямую.
 pkill -f vxwm-statusbar.sh
-"$HOME/.local/bin/vxwm-statusbar.sh" &
+pkill -x vxbar
+"$HOME/.local/bin/vxbar" &

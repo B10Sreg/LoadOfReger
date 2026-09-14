@@ -39,6 +39,13 @@ fn main() {
     let reload = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGUSR1, Arc::clone(&reload))
         .expect("не ставится обработчик SIGUSR1");
+    // SIGUSR2 -- показать/скрыть бар. Как и с USR1, обработчик только взводит
+    // флаг: разматывать это внутри сигнала нельзя, там нельзя трогать Xlib.
+    let toggle = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGUSR2, Arc::clone(&toggle))
+        .expect("не ставится обработчик SIGUSR2");
+    let mut hidden = false;
+
     let quit = Arc::new(AtomicBool::new(false));
     for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
         signal_hook::flag::register(sig, Arc::clone(&quit)).ok();
@@ -61,7 +68,21 @@ fn main() {
             cfg = Config::load(&path);
             xh.reconfigure(&cfg);
             rend.resize(&xh, &cfg);
-            dirty = true;
+            if hidden {
+                // reconfigure переставил струты -- у спрятанного бара их быть не должно
+                xh.hide();
+            }
+            dirty = !hidden;
+        }
+
+        if toggle.swap(false, Ordering::Relaxed) {
+            hidden = !hidden;
+            if hidden {
+                xh.hide();
+            } else {
+                xh.show(&cfg);
+            }
+            dirty = !hidden;
         }
 
         let interval = Duration::from_millis(cfg.bar.interval_ms.max(100));
@@ -70,7 +91,7 @@ fn main() {
             dirty = true;
         }
 
-        if dirty {
+        if dirty && !hidden {
             let st = collect(&xh, &cfg, &mut cpu, &mut vol);
             rend.draw(&cfg, &st, xh.geom.w as f64, xh.geom.h as f64);
             unsafe { xlib::XFlush(xh.dpy) };

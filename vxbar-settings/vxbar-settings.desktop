@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Настройки vxbar
+Name[en]=vxbar Settings
+Comment=Положение, стиль и модули панели vxbar
+Exec=vxbar-settings
+Icon=preferences-desktop
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=vxbar;bar;panel;панель;бар;

@@ -284,6 +284,47 @@ impl X {
         }
     }
 
+    /// Спрятать бар. Мало снять окно с экрана: пока на нём висит
+    /// _NET_WM_STRUT_PARTIAL, WM продолжает резервировать полосу, и на месте
+    /// бара останется пустота. Поэтому струты обнуляем явно.
+    pub fn hide(&self) {
+        unsafe {
+            let zero: [c_long; 12] = [0; 12];
+            xlib::XChangeProperty(
+                self.dpy,
+                self.win,
+                self.atoms.wm_strut_partial,
+                xlib::XA_CARDINAL,
+                32,
+                xlib::PropModeReplace,
+                zero.as_ptr() as *const c_uchar,
+                12,
+            );
+            xlib::XChangeProperty(
+                self.dpy,
+                self.win,
+                self.atoms.wm_strut,
+                xlib::XA_CARDINAL,
+                32,
+                xlib::PropModeReplace,
+                zero.as_ptr() as *const c_uchar,
+                4,
+            );
+            xlib::XUnmapWindow(self.dpy, self.win);
+            xlib::XFlush(self.dpy);
+        }
+    }
+
+    /// Вернуть бар: сначала струты, потом map -- так WM пересчитывает раскладку
+    /// один раз, а не дважды (сперва без резерва, потом с ним).
+    pub fn show(&self, cfg: &Config) {
+        unsafe {
+            self.set_struts(cfg);
+            xlib::XMapRaised(self.dpy, self.win);
+            xlib::XFlush(self.dpy);
+        }
+    }
+
     pub fn cardinal(&self, win: xlib::Window, atom: xlib::Atom) -> Option<i64> {
         self.cardinals(win, atom, 1).and_then(|v| v.first().copied())
     }

@@ -1,0 +1,12 @@
+[SddmGreeterTheme]
+Name=graphite
+Description=Minimal graphite-toned greeter matching the vxwm rice (deep/silver/carbon)
+Author=reg
+Copyright=(c) 2026, reg
+License=MIT
+Type=sddm-theme
+Version=1.0
+Theme-Id=graphite
+Theme-API=2.0
+MainScript=Main.qml
+ConfigFile=theme.conf

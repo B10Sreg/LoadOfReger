@@ -1,0 +1,20 @@
+[package]
+name = "vxbar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+x11 = { version = "2.21", features = ["xlib", "xinerama"] }
+cairo-rs = { version = "0.20", features = ["xlib"] }
+pango = "0.20"
+pangocairo = "0.20"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+signal-hook = "0.3"
+libc = "0.2"
+cairo-sys-rs = { version = "0.20", features = ["xlib"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

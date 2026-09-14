@@ -1,0 +1,94 @@
+/* ==========================================================================
+   Graphite Theme: CARBON — тёплый тёмный ганметал
+   ========================================================================== */
+
+configuration {
+    modi: "drun,run";
+    font: "JetBrainsMono Nerd Font 11";
+    show-icons: true;
+    icon-theme: "Papirus-Dark";
+    display-drun: "   Search";
+    drun-display-format: "{name}";
+    disable-history: false;
+}
+
+* {
+    bg-base:        rgba(23, 21, 19, 90%);
+    bg-alt:         rgba(43, 40, 37, 82%);
+    fg-base:        #948d84;
+    fg-accent:      #c9b28a;
+    border-color:   #c9b28a;
+    placeholder-c:  #6b645c;
+
+    background-color: transparent;
+    text-color:       @fg-base;
+    margin:           0;
+    padding:          0;
+    spacing:          0;
+}
+
+window {
+    background-color: @bg-base;
+    border:           2px solid;
+    border-color:     @border-color;
+    border-radius:    8px;
+    width:            600px;
+    padding:          25px;
+}
+
+mainbox {
+    spacing: 15px;
+    children: [ inputbar, listview ];
+}
+
+inputbar {
+    background-color: @bg-alt;
+    border-radius:    6px;
+    padding:          12px;
+    spacing:          10px;
+    children:         [ prompt, entry ];
+}
+
+prompt {
+    text-color: @fg-accent;
+}
+
+entry {
+    text-color:        @fg-accent;
+    placeholder:       "Type to search...";
+    placeholder-color: @placeholder-c;
+}
+
+listview {
+    lines:        8;
+    columns:      1;
+    spacing:      4px;
+    scrollbar:    false;
+    fixed-height: true;
+}
+
+element {
+    padding:       10px;
+    border-radius: 6px;
+    spacing:       12px;
+}
+
+element normal.normal, element alternate.normal {
+    background-color: transparent;
+    text-color:       @fg-base;
+}
+
+element selected.normal {
+    background-color: @bg-alt;
+    text-color:       @fg-accent;
+}
+
+element-text {
+    text-color:       inherit;
+    vertical-align:   0.5;
+}
+
+element-icon {
+    size:             24px;
+    vertical-align:   0.5;
+}

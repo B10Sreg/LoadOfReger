@@ -1,3 +1,11 @@
+# ~/.local/bin -- сюда install.sh кладёт vxbar и vxbar-settings. Экспорт нужен
+# до startx: X-сессия и всё запущенное из меню наследуют PATH отсюда, а
+# vxbar-settings.desktop вызывает бинарь по имени, без пути.
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
 # Автозапуск X при логине на tty1 (замена SDDM для vxwm-сессии)
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
     exec startx

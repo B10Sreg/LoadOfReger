@@ -19,6 +19,14 @@ fn main() {
     }
     let mut cfg = Config::load(&path);
 
+    // Ставим до первого запроса к X: дальше любая гонка с исчезающим окном
+    // прилетит в наш обработчик, а не в дефолтный, который убивает процесс.
+    unsafe { x::install_error_handler() };
+
+    // Дети (wpctl, команда по клику на часы) нам не нужны: просим ядро
+    // хоронить их само, иначе за сессию накапливаются зомби.
+    unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+
     let mut xh = match x::X::open(&cfg) {
         Ok(x) => x,
         Err(e) => {
@@ -56,6 +64,8 @@ fn main() {
     cpu.sample(); // первый замер -- база для дельты, значение отбрасываем
 
     let xfd = unsafe { xlib::XConnectionNumber(xh.dpy) };
+    // Окно, на свойства которого мы сейчас подписаны ради заголовка.
+    let mut watched: xlib::Window = 0;
     let mut last_tick = Instant::now() - Duration::from_secs(60);
     let mut dirty = true;
 
@@ -92,7 +102,7 @@ fn main() {
         }
 
         if dirty && !hidden {
-            let st = collect(&xh, &cfg, &mut cpu, &mut vol);
+            let st = collect(&xh, &cfg, &mut cpu, &mut vol, &mut watched);
             rend.draw(&cfg, &st, xh.geom.w as f64, xh.geom.h as f64);
             unsafe { xlib::XFlush(xh.dpy) };
             dirty = false;
@@ -147,7 +157,14 @@ fn handle_event(
             xlib::Expose => true,
             xlib::ConfigureNotify => {
                 let c = ev.configure;
-                c.window == xh.win
+                if c.window != xh.win {
+                    return false;
+                }
+                // Бар -- док, его никто не должен двигать. WM без поддержки
+                // доков тащит его как обычное окно: возвращаем на место и
+                // перерисовываем, потому что размер мог измениться.
+                xh.enforce_geometry();
+                true
             }
             xlib::PropertyNotify => {
                 let p = ev.property;
@@ -185,10 +202,13 @@ fn handle_event(
                         true
                     }
                     (Some(Hit::Clock), 1) => {
-                        let _ = std::process::Command::new("sh")
-                            .arg("-c")
-                            .arg(&cfg.clock.on_click)
-                            .spawn();
+                        let cmd = cfg.clock.on_click.trim();
+                        if !cmd.is_empty() {
+                            let _ = std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(cmd)
+                                .spawn();
+                        }
                         false
                     }
                     _ => false,
@@ -204,6 +224,7 @@ fn collect(
     cfg: &Config,
     cpu: &mut modules::CpuMeter,
     vol: &mut modules::VolumeCache,
+    watched: &mut xlib::Window,
 ) -> BarState {
     let a = &xh.atoms;
 
@@ -211,7 +232,10 @@ fn collect(
         .cardinal(xh.root, a.number_of_desktops)
         .unwrap_or(9)
         .clamp(1, 31) as usize;
-    let current = xh.cardinal(xh.root, a.current_desktop).unwrap_or(0).max(0) as usize;
+    // WM может отдать индекс за пределами числа столов (например, сразу после
+    // смены их количества) -- без зажима активного тега просто не было бы.
+    let current = (xh.cardinal(xh.root, a.current_desktop).unwrap_or(0).max(0) as usize)
+        .min(ndesk - 1);
 
     // Занятые теги: у каждого клиента из _NET_CLIENT_LIST читаем _NET_WM_DESKTOP.
     let mut occupied = vec![false; ndesk];
@@ -246,6 +270,11 @@ fn collect(
         .cardinal(xh.root, a.active_window)
         .filter(|v| *v > 0)
         .map(|v| v as xlib::Window);
+    // Подписываемся на свойства активного окна: без этого заголовок в баре
+    // менялся бы только на тике таймера, с задержкой до interval_ms.
+    let active_win = active.unwrap_or(0);
+    xh.watch_title(*watched, active_win);
+    *watched = active_win;
     let title = active.and_then(|w| xh.window_title(w)).unwrap_or_default();
 
     let m = modules::mem();

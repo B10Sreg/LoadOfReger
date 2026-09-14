@@ -199,6 +199,11 @@ impl Config {
 /// "#rrggbb" / "#rgb" / "#rrggbbaa" -> (r, g, b, a) в диапазоне 0..1.
 pub fn parse_color(s: &str) -> (f64, f64, f64, f64) {
     let h = s.trim().trim_start_matches('#');
+    // Дальше режем строку по байтам, поэтому многобайтовый символ в конфиге
+    // ("#…") дал бы панику на границе символа, а не мадженту.
+    if !h.is_ascii() {
+        return (1.0, 0.0, 1.0, 1.0);
+    }
     let n = |i: usize, len: usize| -> f64 {
         let sl = &h[i..i + len];
         let v = u8::from_str_radix(&sl.repeat(3 - len), 16).unwrap_or(0);

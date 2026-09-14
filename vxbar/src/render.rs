@@ -154,25 +154,26 @@ impl Renderer {
         let left_end = x;
 
         // --- правая группа: считаем ширины заранее и кладём от правого края
-        let right_items: Vec<(String, f64)> = cfg
+        // Пустые модули выкидываем сразу: иначе их зазор всё равно попадал бы
+        // в общую ширину и вся правая группа уезжала бы от края на лишний gap.
+        let right_items: Vec<(&String, String, f64)> = cfg
             .modules
             .right
             .iter()
-            .map(|n| {
+            .filter_map(|n| {
                 let t = self.module_text(cfg, st, n);
+                if t.is_empty() {
+                    return None;
+                }
                 let w = self.text_width(&t);
-                (t, w)
+                Some((n, t, w))
             })
             .collect();
-        let right_total: f64 = right_items.iter().map(|(_, w)| w).sum::<f64>()
+        let right_total: f64 = right_items.iter().map(|(_, _, w)| w).sum::<f64>()
             + gap * right_items.len().saturating_sub(1) as f64;
         let mut rx = width - pad - right_total;
         let right_start = rx;
-        for (i, (text, w)) in right_items.iter().enumerate() {
-            if text.is_empty() {
-                continue;
-            }
-            let name = &cfg.modules.right[i];
+        for (name, text, w) in right_items.iter() {
             self.draw_text(text, rx, height, self.module_color(cfg, name));
             match name.as_str() {
                 "volume" => self.regions.push(Region {

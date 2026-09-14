@@ -325,6 +325,97 @@ impl X {
         }
     }
 
+    /// Возвращает бар на своё место, если его подвинули или растянули.
+    /// WM, не умеющий доков, тащит панель как обычное окно: без этого её можно
+    /// было утащить мышью в середину экрана и оставить там навсегда.
+    /// Возвращает true, если геометрию пришлось чинить.
+    pub fn enforce_geometry(&self) -> bool {
+        unsafe {
+            let mut attrs: xlib::XWindowAttributes = std::mem::zeroed();
+            if xlib::XGetWindowAttributes(self.dpy, self.win, &mut attrs) == 0 {
+                return false;
+            }
+            // attrs.x/y -- координаты в родителе, а не на экране: WM, который
+            // перерисовывает окно в рамку, отдал бы здесь ноль независимо от
+            // того, куда бар утащили. Спрашиваем настоящую позицию у X.
+            let mut rx: c_int = 0;
+            let mut ry: c_int = 0;
+            let mut child: xlib::Window = 0;
+            if xlib::XTranslateCoordinates(
+                self.dpy,
+                self.win,
+                self.root,
+                0,
+                0,
+                &mut rx,
+                &mut ry,
+                &mut child,
+            ) == 0
+            {
+                return false;
+            }
+            if rx == self.geom.x
+                && ry == self.geom.y
+                && attrs.width == self.geom.w as c_int
+                && attrs.height == self.geom.h as c_int
+            {
+                return false;
+            }
+            xlib::XMoveResizeWindow(
+                self.dpy,
+                self.win,
+                self.geom.x,
+                self.geom.y,
+                self.geom.w,
+                self.geom.h,
+            );
+            xlib::XRaiseWindow(self.dpy, self.win);
+            xlib::XFlush(self.dpy);
+            true
+        }
+    }
+
+    /// Подписаться на смену свойств окна, чтобы заголовок в баре обновлялся в
+    /// момент переименования, а не на следующем тике таймера. Подписка на
+    /// прошлое активное окно снимается: иначе за сессию накопились бы
+    /// десятки лишних источников событий.
+    pub fn watch_title(&self, prev: xlib::Window, next: xlib::Window) {
+        unsafe {
+            if prev == next {
+                return;
+            }
+            // Своё окно не трогаем ни при каких условиях: XSelectInput задаёт
+            // маску целиком, и подписка на заголовок снесла бы нам Expose,
+            // ButtonPress и StructureNotify -- бар перестал бы и перерисовываться,
+            // и реагировать на клики. WM вполне может сделать бар активным
+            // окном, так что случай не гипотетический.
+            if prev != 0 && prev != self.root && prev != self.win {
+                self.update_event_mask(prev, xlib::PropertyChangeMask, false);
+            }
+            if next != 0 && next != self.root && next != self.win {
+                self.update_event_mask(next, xlib::PropertyChangeMask, true);
+            }
+        }
+    }
+
+    /// Добавляет или снимает биты в маске событий чужого окна, сохраняя
+    /// остальные. XGetWindowAttributes отдаёт your_event_mask -- маску,
+    /// выбранную именно нами, так что чужие подписки мы не задеваем.
+    unsafe fn update_event_mask(&self, win: xlib::Window, bits: c_long, add: bool) {
+        let mut attrs: xlib::XWindowAttributes = std::mem::zeroed();
+        if xlib::XGetWindowAttributes(self.dpy, win, &mut attrs) == 0 {
+            return;
+        }
+        let mask = if add {
+            attrs.your_event_mask | bits
+        } else {
+            attrs.your_event_mask & !bits
+        };
+        if mask != attrs.your_event_mask {
+            xlib::XSelectInput(self.dpy, win, mask);
+        }
+    }
+
     pub fn cardinal(&self, win: xlib::Window, atom: xlib::Atom) -> Option<i64> {
         self.cardinals(win, atom, 1).and_then(|v| v.first().copied())
     }
@@ -459,6 +550,35 @@ impl X {
             xlib::XFlush(self.dpy);
         }
     }
+}
+
+/// Xlib по умолчанию убивает процесс на любой ошибке протокола. Для бара это
+/// смертельно: он читает свойства чужих окон из _NET_CLIENT_LIST, и окно
+/// вполне может закрыться между тем, как WM выписал список, и нашим запросом
+/// -- BadWindow на ровном месте уносил бы панель вместе с сессией.
+pub unsafe fn install_error_handler() {
+    unsafe extern "C" fn handler(
+        _dpy: *mut xlib::Display,
+        ev: *mut xlib::XErrorEvent,
+    ) -> c_int {
+        let code = (*ev).error_code;
+        // Гонки с исчезающими окнами -- ожидаемый фон, остальное хотим видеть.
+        if code == xlib::BadWindow
+            || code == xlib::BadDrawable
+            || code == xlib::BadMatch
+            || code == xlib::BadValue
+        {
+            return 0;
+        }
+        eprintln!(
+            "vxbar: X-ошибка {} (запрос {}.{})",
+            code,
+            (*ev).request_code,
+            (*ev).minor_code
+        );
+        0
+    }
+    xlib::XSetErrorHandler(Some(handler));
 }
 
 pub fn monitor_rect(dpy: *mut xlib::Display, screen: c_int, idx: usize) -> Rect {

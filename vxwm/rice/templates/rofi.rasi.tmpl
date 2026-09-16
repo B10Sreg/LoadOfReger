@@ -1,5 +1,6 @@
 /* ==========================================================================
-   Graphite Theme: CARBON — тёплый тёмный ганметал
+   {{NAME_UPPER}} — {{DESCRIPTION}}
+   Файл собран из palette.toml генератором mktheme.py. Правки затрутся.
    ========================================================================== */
 
 configuration {
@@ -13,12 +14,12 @@ configuration {
 }
 
 * {
-    bg-base:        rgba(23, 21, 19, 90%);
-    bg-alt:         rgba(43, 40, 37, 82%);
-    fg-base:        #948d84;
-    fg-accent:      #c9b28a;
-    border-color:   #c9b28a;
-    placeholder-c:  #6b645c;
+    bg-base:        rgba({{DIM_BG_RGB}}, 90%);
+    bg-alt:         rgba({{SEL_BG_RGB}}, 82%);
+    fg-base:        {{NORM_FG}};
+    fg-accent:      {{SEL_BORDER}};
+    border-color:   {{SEL_BORDER}};
+    placeholder-c:  {{MUTED}};
 
     background-color: transparent;
     text-color:       @fg-base;

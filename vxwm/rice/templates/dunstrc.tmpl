@@ -1,3 +1,5 @@
+# {{NAME_UPPER}} — {{DESCRIPTION}}
+# Файл собран из palette.toml генератором mktheme.py. Правки затрутся.
 [global]
     monitor = 0
     follow = mouse
@@ -22,7 +24,7 @@
     horizontal_padding = 12
     text_icon_padding = 8
     frame_width = 2
-    frame_color = "#c0c0c0"
+    frame_color = "{{SEL_BORDER}}"
     separator_color = frame
     sort = yes
     idle_threshold = 120
@@ -52,19 +54,19 @@
     mouse_right_click = close_all
 
 [urgency_low]
-    background = "#1e1e20"
-    foreground = "#8a8a8e"
-    frame_color = "#2a2a2d"
+    background = "{{NORM_BG}}"
+    foreground = "{{NORM_FG}}"
+    frame_color = "{{NORM_BORDER}}"
     timeout = 4
 
 [urgency_normal]
-    background = "#1e1e20"
-    foreground = "#c0c0c0"
-    frame_color = "#c0c0c0"
+    background = "{{NORM_BG}}"
+    foreground = "{{SEL_BORDER}}"
+    frame_color = "{{SEL_BORDER}}"
     timeout = 6
 
 [urgency_critical]
-    background = "#1e1e20"
-    foreground = "#ffffff"
-    frame_color = "#b06a6a"
+    background = "{{NORM_BG}}"
+    foreground = "{{SEL_FG}}"
+    frame_color = "{{COLOR1}}"
     timeout = 0

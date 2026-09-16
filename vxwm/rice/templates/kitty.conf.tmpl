@@ -1,0 +1,43 @@
+# ==========================================================================
+# {{NAME_UPPER}} — {{DESCRIPTION}}
+# Файл собран из palette.toml генератором mktheme.py. Правки затрутся.
+# ==========================================================================
+font_family      JetBrainsMono Nerd Font
+font_size        10.0
+
+background_opacity         0.85
+dynamic_background_opacity yes
+window_padding_width       12
+
+background            {{NORM_BG}}
+foreground            {{SEL_BORDER}}
+selection_background  {{SEL_BG}}
+selection_foreground  {{SEL_FG}}
+cursor                {{SEL_BORDER}}
+
+enable_audio_bell no
+
+# Сокет для смены цветов на лету. Без него уже открытые терминалы остаются в
+# старой теме до перезапуска -- на светлой теме это особенно заметно.
+# socket-only, а не yes: управлять терминалом сможет только тот, кто дотянулся
+# до сокета в XDG_RUNTIME_DIR, а не любая программа в сессии.
+allow_remote_control socket-only
+listen_on unix:${XDG_RUNTIME_DIR}/kitty-vxwm
+
+# ANSI-палитра: приглушённые, но узнаваемые оттенки (диффы/вим/ls остаются читаемыми)
+color0  {{COLOR0}}
+color8  {{COLOR8}}
+color1  {{COLOR1}}
+color9  {{COLOR9}}
+color2  {{COLOR2}}
+color10 {{COLOR10}}
+color3  {{COLOR3}}
+color11 {{COLOR11}}
+color4  {{COLOR4}}
+color12 {{COLOR12}}
+color5  {{COLOR5}}
+color13 {{COLOR13}}
+color6  {{COLOR6}}
+color14 {{COLOR14}}
+color7  {{COLOR7}}
+color15 {{COLOR15}}

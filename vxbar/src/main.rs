@@ -1,5 +1,6 @@
 mod config;
 mod modules;
+mod popup;
 mod render;
 mod x;
 
@@ -10,6 +11,7 @@ use std::time::{Duration, Instant};
 use x11::xlib;
 
 use config::Config;
+use popup::{Popup, PopupData};
 use render::{BarState, Hit, Renderer, TagInfo};
 
 fn main() {
@@ -59,14 +61,28 @@ fn main() {
         signal_hook::flag::register(sig, Arc::clone(&quit)).ok();
     }
 
-    let mut cpu = modules::CpuMeter::default();
-    let mut vol = modules::VolumeCache::new();
-    cpu.sample(); // первый замер -- база для дельты, значение отбрасываем
+    let pop = match Popup::new(&xh, &cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("vxbar: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let mut rt = Runtime {
+        cpu: modules::CpuMeter::default(),
+        temps: modules::TempSensors::discover(),
+        net: modules::NetMeter::new(),
+        music: modules::MusicCache::new(),
+        vol: modules::VolumeCache::new(),
+        procs: modules::ProcSampler::default(),
+        pop,
+        keeper: GeometryKeeper::default(),
+        watched: 0,
+    };
+    rt.cpu.sample(); // первый замер -- база для дельты, значение отбрасываем
 
     let xfd = unsafe { xlib::XConnectionNumber(xh.dpy) };
-    // Окно, на свойства которого мы сейчас подписаны ради заголовка.
-    let mut watched: xlib::Window = 0;
-    let mut keeper = GeometryKeeper::default();
     let mut last_tick = Instant::now() - Duration::from_secs(60);
     let mut dirty = true;
 
@@ -77,8 +93,12 @@ fn main() {
 
         if reload.swap(false, Ordering::Relaxed) {
             cfg = Config::load(&path);
+            // Геометрия и шрифт поменялись -- открытый виджет всё равно висел
+            // бы не на месте и старым кеглем.
+            rt.pop.close();
             xh.reconfigure(&cfg);
             rend.resize(&xh, &cfg);
+            rt.pop.reload_font(&cfg);
             if hidden {
                 // reconfigure переставил струты -- у спрятанного бара их быть не должно
                 xh.hide();
@@ -89,6 +109,7 @@ fn main() {
         if toggle.swap(false, Ordering::Relaxed) {
             hidden = !hidden;
             if hidden {
+                rt.pop.close();
                 xh.hide();
             } else {
                 xh.show(&cfg);
@@ -103,9 +124,13 @@ fn main() {
         }
 
         if dirty && !hidden {
-            let st = collect(&xh, &cfg, &mut cpu, &mut vol, &mut watched);
+            let st = collect(&xh, &cfg, &mut rt);
             rend.draw(&cfg, &st, xh.geom.w as f64, xh.geom.h as f64);
             unsafe { xlib::XFlush(xh.dpy) };
+            if let Some(kind) = rt.pop.kind {
+                let data = popup_data(&cfg, kind, &st, &mut rt.procs);
+                rt.pop.refresh(&cfg, &data);
+            }
             dirty = false;
         }
 
@@ -122,13 +147,15 @@ fn main() {
         while unsafe { xlib::XPending(xh.dpy) } > 0 {
             let mut ev: xlib::XEvent = unsafe { std::mem::zeroed() };
             unsafe { xlib::XNextEvent(xh.dpy, &mut ev) };
-            if handle_event(&ev, &xh, &cfg, &rend, &mut vol, &mut keeper) {
+            if handle_event(&ev, &xh, &cfg, &rend, &mut rt) {
                 dirty = true;
             }
         }
     }
 
+    rt.pop.close();
     unsafe {
+        xlib::XDestroyWindow(xh.dpy, rt.pop.win);
         xlib::XDestroyWindow(xh.dpy, xh.win);
         xlib::XCloseDisplay(xh.dpy);
     }
@@ -145,7 +172,24 @@ fn wait_fd(fd: c_int, dur: Duration) {
     unsafe { libc::poll(&mut pfd, 1, ms) };
 }
 
-/// Возвращает true, если бар надо перерисовать.
+/// Живое состояние бара между событиями: сэмплеры модулей, открытый виджет и
+/// сторож геометрии. Собрано в одну структуру, потому что обработчик событий
+/// трогает почти всё это разом, а десяток отдельных ссылок в сигнатуре читать
+/// невозможно.
+struct Runtime {
+    cpu: modules::CpuMeter,
+    vol: modules::VolumeCache,
+    /// Датчики ищутся один раз: нумерация hwmon в пределах сессии не меняется.
+    temps: modules::TempSensors,
+    net: modules::NetMeter,
+    music: modules::MusicCache,
+    procs: modules::ProcSampler,
+    pop: Popup,
+    keeper: GeometryKeeper,
+    /// Окно, на свойства которого мы сейчас подписаны ради заголовка.
+    watched: xlib::Window,
+}
+
 /// Сколько раз подряд бар возвращает себя на место, прежде чем сдаться.
 /// Одиночный перетаск мышью -- это одна-две поправки; сотни подряд означают,
 /// что бар воюет с WM, который тайлит его как обычное окно. В такой войне
@@ -205,13 +249,13 @@ impl GeometryKeeper {
     }
 }
 
+/// Возвращает true, если бар надо перерисовать.
 fn handle_event(
     ev: &xlib::XEvent,
     xh: &x::X,
     cfg: &Config,
     rend: &Renderer,
-    vol: &mut modules::VolumeCache,
-    keeper: &mut GeometryKeeper,
+    rt: &mut Runtime,
 ) -> bool {
     unsafe {
         match ev.get_type() {
@@ -224,7 +268,7 @@ fn handle_event(
                 // Бар -- док, его никто не должен двигать. WM без поддержки
                 // доков тащит его как обычное окно: возвращаем на место и
                 // перерисовываем, потому что размер мог измениться.
-                keeper.keep(xh);
+                rt.keeper.keep(xh);
                 true
             }
             xlib::PropertyNotify => {
@@ -241,36 +285,89 @@ fn handle_event(
             }
             xlib::ButtonPress => {
                 let b = ev.button;
-                let hit = rend.hit_test(b.x as f64);
+                // Пока виджет открыт, указатель захвачен на root: клик мимо
+                // бара и мимо самого виджета его закрывает.
+                if rt.pop.visible() && b.window != xh.win {
+                    // Указатель захвачен на root, поэтому клик по самому
+                    // виджету может прийти и с его окном, и с root-координатами.
+                    let (lx, ly) = if popup::is_popup_window(&rt.pop, b.window) {
+                        (b.x as f64, b.y as f64)
+                    } else {
+                        popup::local_coords(&b, xh, &rt.pop)
+                    };
+                    let (pw, ph) = rt.pop.size();
+                    if lx >= 0.0 && ly >= 0.0 && lx < pw && ly < ph {
+                        if rt.pop.click(lx, ly) {
+                            rt.vol.invalidate();
+                            return true;
+                        }
+                        return false;
+                    }
+                    rt.pop.close();
+                    return true;
+                }
+                if b.window != xh.win {
+                    return false;
+                }
+                // Вдоль оси бара: у вертикального модули разложены по Y.
+                let along = if cfg.bar.position.vertical() {
+                    b.y as f64
+                } else {
+                    b.x as f64
+                };
+                let hit = rend.hit_test(along);
                 match (hit, b.button) {
                     (Some(Hit::Tag(i)), 1) => {
                         xh.request_desktop(i);
                         true
                     }
-                    (Some(Hit::Volume), 1) => {
+                    // Средняя кнопка и колесо на громкости остаются быстрыми
+                    // действиями: открывать ради них окно было бы лишним шагом.
+                    (Some(Hit::Volume), 2) | (Some(Hit::Volume), 3) => {
                         modules::toggle_mute();
-                        vol.invalidate();
+                        rt.vol.invalidate();
                         true
                     }
                     (Some(Hit::Volume), 4) => {
                         modules::set_volume_step(5);
-                        vol.invalidate();
+                        rt.vol.invalidate();
                         true
                     }
                     (Some(Hit::Volume), 5) => {
                         modules::set_volume_step(-5);
-                        vol.invalidate();
+                        rt.vol.invalidate();
+                        true
+                    }
+                    // Музыка живёт теми же жестами, что и громкость: клик --
+                    // пауза, колесо -- соседний трек. Виджета ей не нужно,
+                    // всё содержимое и так в баре.
+                    (Some(Hit::Music), 1) | (Some(Hit::Music), 2) => {
+                        modules::music_play_pause();
+                        rt.music.invalidate();
+                        true
+                    }
+                    (Some(Hit::Music), 4) => {
+                        modules::music_next();
+                        rt.music.invalidate();
+                        true
+                    }
+                    (Some(Hit::Music), 5) => {
+                        modules::music_prev();
+                        rt.music.invalidate();
                         true
                     }
                     (Some(Hit::Clock), 1) => {
+                        // Заданная вручную команда важнее встроенного
+                        // календаря: её просили явно.
                         let cmd = cfg.clock.on_click.trim();
                         if !cmd.is_empty() {
-                            let _ = std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(cmd)
-                                .spawn();
+                            let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+                            return false;
                         }
-                        false
+                        toggle_popup(xh, cfg, rend, rt, Hit::Clock)
+                    }
+                    (Some(h), 1) if popup::Kind::from_hit(h).is_some() => {
+                        toggle_popup(xh, cfg, rend, rt, h)
                     }
                     _ => false,
                 }
@@ -280,13 +377,45 @@ fn handle_event(
     }
 }
 
-fn collect(
-    xh: &x::X,
+/// Клик по модулю открывает его виджет, повторный клик по тому же -- закрывает.
+fn toggle_popup(xh: &x::X, cfg: &Config, rend: &Renderer, rt: &mut Runtime, hit: Hit) -> bool {
+    if !cfg.popups.enabled {
+        return false;
+    }
+    let kind = match popup::Kind::from_hit(hit) {
+        Some(k) => k,
+        None => return false,
+    };
+    if rt.pop.kind == Some(kind) {
+        rt.pop.close();
+        return true;
+    }
+    let region = match rend.region_of(hit) {
+        Some(r) => r,
+        None => return false,
+    };
+    let st = collect(xh, cfg, rt);
+    let data = popup_data(cfg, kind, &st, &mut rt.procs);
+    rt.pop.open(xh, cfg, kind, region, &data);
+    false
+}
+
+fn popup_data(
     cfg: &Config,
-    cpu: &mut modules::CpuMeter,
-    vol: &mut modules::VolumeCache,
-    watched: &mut xlib::Window,
-) -> BarState {
+    kind: popup::Kind,
+    st: &BarState,
+    procs: &mut modules::ProcSampler,
+) -> PopupData {
+    PopupData {
+        volume: st.volume,
+        cpu: st.cpu,
+        mem_used: st.mem_used,
+        mem_total: st.mem_total,
+        procs: popup::procs_for(kind, cfg, procs),
+    }
+}
+
+fn collect(xh: &x::X, cfg: &Config, rt: &mut Runtime) -> BarState {
     let a = &xh.atoms;
 
     let ndesk = xh
@@ -295,8 +424,8 @@ fn collect(
         .clamp(1, 31) as usize;
     // WM может отдать индекс за пределами числа столов (например, сразу после
     // смены их количества) -- без зажима активного тега просто не было бы.
-    let current = (xh.cardinal(xh.root, a.current_desktop).unwrap_or(0).max(0) as usize)
-        .min(ndesk - 1);
+    let current =
+        (xh.cardinal(xh.root, a.current_desktop).unwrap_or(0).max(0) as usize).min(ndesk - 1);
 
     // Занятые теги: у каждого клиента из _NET_CLIENT_LIST читаем _NET_WM_DESKTOP.
     let mut occupied = vec![false; ndesk];
@@ -318,10 +447,7 @@ fn collect(
 
     let tags = (0..ndesk)
         .map(|i| TagInfo {
-            label: names
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| (i + 1).to_string()),
+            label: names.get(i).cloned().unwrap_or_else(|| (i + 1).to_string()),
             active: i == current,
             occupied: occupied[i],
         })
@@ -334,8 +460,8 @@ fn collect(
     // Подписываемся на свойства активного окна: без этого заголовок в баре
     // менялся бы только на тике таймера, с задержкой до interval_ms.
     let active_win = active.unwrap_or(0);
-    xh.watch_title(*watched, active_win);
-    *watched = active_win;
+    xh.watch_title(rt.watched, active_win);
+    rt.watched = active_win;
     let title = active.and_then(|w| xh.window_title(w)).unwrap_or_default();
 
     let m = modules::mem();
@@ -343,10 +469,13 @@ fn collect(
         tags,
         title,
         layout: String::new(),
-        cpu: cpu.sample(),
+        cpu: rt.cpu.sample(),
         mem_used: m.used_gb,
         mem_total: m.total_gb,
-        volume: vol.get(),
+        volume: rt.vol.get(),
         clock: modules::clock(&cfg.clock.format),
+        temps: rt.temps.read(),
+        net: rt.net.sample(),
+        music: rt.music.get(),
     }
 }

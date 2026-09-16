@@ -89,13 +89,7 @@ impl X {
             // бара были прозрачными, а не чёрными. Если такого нет -- падаем
             // на визуал по умолчанию, бар просто будет полностью непрозрачным.
             let mut vinfo: xlib::XVisualInfo = std::mem::zeroed();
-            let argb = xlib::XMatchVisualInfo(
-                dpy,
-                screen,
-                32,
-                xlib::TrueColor,
-                &mut vinfo,
-            ) != 0;
+            let argb = xlib::XMatchVisualInfo(dpy, screen, 32, xlib::TrueColor, &mut vinfo) != 0;
             let (visual, depth) = if argb {
                 (vinfo.visual, vinfo.depth)
             } else {
@@ -223,22 +217,37 @@ impl X {
     /// Струт резервирует полосу от края ЭКРАНА, а не монитора, поэтому при
     /// нескольких мониторах надо считать от границы всего экрана.
     pub unsafe fn set_struts(&self, cfg: &Config) {
+        let screen_w = xlib::XDisplayWidth(self.dpy, self.screen) as i32;
         let screen_h = xlib::XDisplayHeight(self.dpy, self.screen) as i32;
         let mut strut: [c_long; 12] = [0; 12];
 
-        let reserve = (cfg.bar.height as i32 + cfg.bar.margin_edge.max(0)) as c_long;
+        let thick = cfg.bar.height as i32 + cfg.bar.margin_edge.max(0);
         match cfg.bar.position {
             Position::Top => {
                 // top = нижняя граница бара относительно верха экрана
-                strut[2] = (self.mon.y + cfg.bar.margin_edge.max(0) + cfg.bar.height as i32) as c_long;
+                strut[2] = (self.mon.y + thick) as c_long;
                 strut[8] = self.geom.x as c_long;
                 strut[9] = (self.geom.x + self.geom.w as i32 - 1) as c_long;
             }
             Position::Bottom => {
                 let mon_bottom = self.mon.y + self.mon.h as i32;
-                strut[3] = (screen_h - mon_bottom) as c_long + reserve;
+                strut[3] = (screen_h - mon_bottom + thick) as c_long;
                 strut[10] = self.geom.x as c_long;
                 strut[11] = (self.geom.x + self.geom.w as i32 - 1) as c_long;
+            }
+            // У вертикального бара резервируется полоса слева/справа, а
+            // диапазон задаётся по Y -- иначе WM отдал бы под бар всю высоту
+            // экрана, включая соседние мониторы.
+            Position::Left => {
+                strut[0] = (self.mon.x + thick) as c_long;
+                strut[4] = self.geom.y as c_long;
+                strut[5] = (self.geom.y + self.geom.h as i32 - 1) as c_long;
+            }
+            Position::Right => {
+                let mon_right = self.mon.x + self.mon.w as i32;
+                strut[1] = (screen_w - mon_right + thick) as c_long;
+                strut[6] = self.geom.y as c_long;
+                strut[7] = (self.geom.y + self.geom.h as i32 - 1) as c_long;
             }
         }
 
@@ -348,14 +357,7 @@ impl X {
             let mut ry: c_int = 0;
             let mut child: xlib::Window = 0;
             if xlib::XTranslateCoordinates(
-                self.dpy,
-                self.win,
-                self.root,
-                0,
-                0,
-                &mut rx,
-                &mut ry,
-                &mut child,
+                self.dpy, self.win, self.root, 0, 0, &mut rx, &mut ry, &mut child,
             ) == 0
             {
                 return false;
@@ -423,7 +425,8 @@ impl X {
     }
 
     pub fn cardinal(&self, win: xlib::Window, atom: xlib::Atom) -> Option<i64> {
-        self.cardinals(win, atom, 1).and_then(|v| v.first().copied())
+        self.cardinals(win, atom, 1)
+            .and_then(|v| v.first().copied())
     }
 
     pub fn cardinals(&self, win: xlib::Window, atom: xlib::Atom, len: c_long) -> Option<Vec<i64>> {
@@ -454,7 +457,7 @@ impl X {
                 return None;
             }
             let slice = std::slice::from_raw_parts(prop as *const c_long, nitems as usize);
-            let out = slice.iter().map(|v| *v as i64).collect();
+            let out = slice.to_vec();
             xlib::XFree(prop as *mut _);
             Some(out)
         }
@@ -481,12 +484,14 @@ impl X {
             return None;
         }
         let out = if tp.encoding == xlib::XA_STRING {
-            CStr::from_ptr(tp.value as *const _).to_string_lossy().into_owned()
+            CStr::from_ptr(tp.value as *const _)
+                .to_string_lossy()
+                .into_owned()
         } else {
             let mut list: *mut *mut i8 = ptr::null_mut();
             let mut count: c_int = 0;
             let mut s = String::new();
-            if xlib::Xutf8TextPropertyToTextList(self.dpy, &mut tp, &mut list, &mut count)
+            if xlib::Xutf8TextPropertyToTextList(self.dpy, &tp, &mut list, &mut count)
                 >= xlib::Success as c_int
                 && count > 0
                 && !list.is_null()
@@ -516,12 +521,16 @@ impl X {
             let mut list: *mut *mut i8 = ptr::null_mut();
             let mut count: c_int = 0;
             let mut out = Vec::new();
-            if xlib::Xutf8TextPropertyToTextList(self.dpy, &mut tp, &mut list, &mut count)
+            if xlib::Xutf8TextPropertyToTextList(self.dpy, &tp, &mut list, &mut count)
                 >= xlib::Success as c_int
                 && !list.is_null()
             {
                 for i in 0..count as isize {
-                    out.push(CStr::from_ptr(*list.offset(i)).to_string_lossy().into_owned());
+                    out.push(
+                        CStr::from_ptr(*list.offset(i))
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
                 }
                 xlib::XFreeStringList(list);
             }
@@ -563,10 +572,7 @@ impl X {
 /// вполне может закрыться между тем, как WM выписал список, и нашим запросом
 /// -- BadWindow на ровном месте уносил бы панель вместе с сессией.
 pub unsafe fn install_error_handler() {
-    unsafe extern "C" fn handler(
-        _dpy: *mut xlib::Display,
-        ev: *mut xlib::XErrorEvent,
-    ) -> c_int {
+    unsafe extern "C" fn handler(_dpy: *mut xlib::Display, ev: *mut xlib::XErrorEvent) -> c_int {
         let code = (*ev).error_code;
         // Гонки с исчезающими окнами -- ожидаемый фон, остальное хотим видеть.
         if code == xlib::BadWindow
@@ -618,16 +624,35 @@ pub fn monitor_rect(dpy: *mut xlib::Display, screen: c_int, idx: usize) -> Rect 
 pub fn bar_rect(cfg: &Config, mon: &Rect) -> Rect {
     let side = cfg.bar.margin_side.max(0);
     let edge = cfg.bar.margin_edge.max(0);
-    let w = (mon.w as i32 - 2 * side).max(1) as u32;
-    let x = mon.x + side;
-    let y = match cfg.bar.position {
-        Position::Top => mon.y + edge,
-        Position::Bottom => mon.y + mon.h as i32 - cfg.bar.height as i32 - edge,
-    };
-    Rect {
-        x,
-        y,
-        w,
-        h: cfg.bar.height.max(1),
+    let thick = cfg.bar.height.max(1);
+    match cfg.bar.position {
+        Position::Top | Position::Bottom => {
+            let y = if cfg.bar.position == Position::Top {
+                mon.y + edge
+            } else {
+                mon.y + mon.h as i32 - thick as i32 - edge
+            };
+            Rect {
+                x: mon.x + side,
+                y,
+                w: (mon.w as i32 - 2 * side).max(1) as u32,
+                h: thick,
+            }
+        }
+        // Вертикальный бар: margin_side режет его сверху и снизу, margin_edge
+        // отодвигает от боковой кромки.
+        _ => {
+            let x = if cfg.bar.position == Position::Left {
+                mon.x + edge
+            } else {
+                mon.x + mon.w as i32 - thick as i32 - edge
+            };
+            Rect {
+                x,
+                y: mon.y + side,
+                w: thick,
+                h: (mon.h as i32 - 2 * side).max(1) as u32,
+            }
+        }
     }
 }

@@ -12,6 +12,8 @@ pub struct Config {
     pub tags: Tags,
     pub modules: Modules,
     pub clock: Clock,
+    pub popups: Popups,
+    pub music: Music,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,12 +21,23 @@ pub struct Config {
 pub enum Position {
     Top,
     Bottom,
+    Left,
+    Right,
+}
+
+impl Position {
+    /// Вертикальный бар стоит у боковой кромки: вдоль него модули кладутся
+    /// сверху вниз, а «толщиной» работает bar.height.
+    pub fn vertical(self) -> bool {
+        matches!(self, Position::Left | Position::Right)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Bar {
     pub position: Position,
+    /// Толщина бара: высота у горизонтального, ширина у вертикального.
     pub height: u32,
     /// Отступ от края экрана вдоль оси бара и поперёк неё. Ненулевой margin_edge
     /// делает бар "плавающим": струт всё равно резервирует height + margin_edge.
@@ -122,11 +135,43 @@ impl Default for Modules {
             left: vec!["tags".into()],
             center: vec!["title".into()],
             right: vec![
+                "music".into(),
+                "net".into(),
+                "temp".into(),
                 "cpu".into(),
                 "ram".into(),
                 "volume".into(),
                 "clock".into(),
             ],
+        }
+    }
+}
+
+/// Выдвижные виджеты: по клику на модуль рядом с баром открывается окошко
+/// с подробностями (календарь у часов, регулятор у громкости, топ процессов
+/// у cpu/ram).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Popups {
+    pub enabled: bool,
+    pub width: u32,
+    /// Зазор между кромкой бара и виджетом.
+    pub gap: i32,
+    pub padding: f64,
+    pub radius: f64,
+    /// Сколько процессов показывать в виджетах cpu и ram.
+    pub proc_rows: usize,
+}
+
+impl Default for Popups {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            width: 260,
+            gap: 6,
+            padding: 12.0,
+            radius: 10.0,
+            proc_rows: 5,
         }
     }
 }
@@ -145,6 +190,20 @@ impl Default for Clock {
             format: "%a %d %b  %H:%M".into(),
             on_click: String::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Music {
+    /// Во сколько символов ужимать «исполнитель -- трек». Названия бывают
+    /// длиной в полбара, и без предела модуль выдавливал бы остальные.
+    pub max_chars: usize,
+}
+
+impl Default for Music {
+    fn default() -> Self {
+        Self { max_chars: 32 }
     }
 }
 
@@ -190,8 +249,7 @@ impl Config {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let text = toml::to_string_pretty(&Self::default())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let text = toml::to_string_pretty(&Self::default()).map_err(std::io::Error::other)?;
         std::fs::write(path, text)
     }
 }

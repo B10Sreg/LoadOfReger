@@ -10,14 +10,22 @@ import (
 // (максимум шесть строк), а инкрементальная правка виджетов здесь дороже
 // в сопровождении, чем пересборка.
 type zone struct {
-	title string
-	desc  string
+	// Подписи зависят от ориентации: у вертикального бара «слева» -- это верх.
+	horiz [2]string
+	vert  [2]string
 	get   func(*Config) []string
 	set   func(*Config, []string)
 	group *adw.PreferencesGroup
 	// PreferencesGroup не отдаёт список своих детей, поэтому строки, которые
 	// мы в неё добавили, приходится помнить самим, чтобы уметь их снять.
 	rows []gtk.Widgetter
+}
+
+func (z *zone) labels(vert bool) (string, string) {
+	if vert {
+		return z.vert[0], z.vert[1]
+	}
+	return z.horiz[0], z.horiz[1]
 }
 
 func (a *App) pageModules() *adw.PreferencesPage {
@@ -27,29 +35,31 @@ func (a *App) pageModules() *adw.PreferencesPage {
 
 	zones := []*zone{
 		{
-			title: "Слева",
-			desc:  "Прижимается к левому краю",
+			horiz: [2]string{"Слева", "Прижимается к левому краю"},
+			vert:  [2]string{"Сверху", "Прижимается к верхнему краю"},
 			get:   func(c *Config) []string { return c.Modules.Left },
 			set:   func(c *Config, v []string) { c.Modules.Left = v },
 		},
 		{
-			title: "По центру",
-			desc:  "Центрируется по ширине бара",
+			horiz: [2]string{"По центру", "Центрируется по ширине бара"},
+			vert:  [2]string{"По центру", "Центрируется по высоте бара"},
 			get:   func(c *Config) []string { return c.Modules.Center },
 			set:   func(c *Config, v []string) { c.Modules.Center = v },
 		},
 		{
-			title: "Справа",
-			desc:  "Прижимается к правому краю",
+			horiz: [2]string{"Справа", "Прижимается к правому краю"},
+			vert:  [2]string{"Снизу", "Прижимается к нижнему краю"},
 			get:   func(c *Config) []string { return c.Modules.Right },
 			set:   func(c *Config, v []string) { c.Modules.Right = v },
 		},
 	}
+	a.zones = zones
 
 	for _, z := range zones {
 		z.group = adw.NewPreferencesGroup()
-		z.group.SetTitle(z.title)
-		z.group.SetDescription(z.desc)
+		t, d := z.labels(a.cfg.Bar.Vertical())
+		z.group.SetTitle(t)
+		z.group.SetDescription(d)
 		page.Add(z.group)
 	}
 
@@ -62,6 +72,16 @@ func (a *App) pageModules() *adw.PreferencesPage {
 		}
 	}
 	rebuild()
+
+	// Настройки отдельных модулей. Пока такая одна, но группа нужна: иначе
+	// строка висела бы под зонами без объяснения, к чему она относится.
+	opts := adw.NewPreferencesGroup()
+	opts.SetTitle("Настройки модулей")
+	opts.Add(a.spin("Музыка: длина названия",
+		"Символов, дальше обрезается многоточием", 8, 80, 1, 0,
+		float64(a.cfg.Music.MaxChars),
+		func(v float64) { a.cfg.Music.MaxChars = int(v) }))
+	page.Add(opts)
 
 	return page
 }
@@ -197,7 +217,8 @@ func (a *App) movePopover(from *zone, all []*zone, idx int, id string, rebuild f
 			continue
 		}
 		to := to
-		b := gtk.NewButtonWithLabel("В зону «" + to.title + "»")
+		title, _ := to.labels(a.cfg.Bar.Vertical())
+		b := gtk.NewButtonWithLabel("В зону «" + title + "»")
 		b.AddCSSClass("flat")
 		b.SetHAlign(gtk.AlignFill)
 		if c := b.Child(); c != nil {

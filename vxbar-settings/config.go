@@ -20,11 +20,13 @@ type Config struct {
 	Tags    Tags    `toml:"tags"`
 	Modules Modules `toml:"modules"`
 	Clock   Clock   `toml:"clock"`
+	Popups  Popups  `toml:"popups"`
+	Music   Music   `toml:"music"`
 }
 
 type Bar struct {
-	Position   string `toml:"position"` // "top" | "bottom"
-	Height     int    `toml:"height"`
+	Position   string `toml:"position"` // "top" | "bottom" | "left" | "right"
+	Height     int    `toml:"height"`   // толщина: высота у горизонтального, ширина у вертикального
 	MarginEdge int    `toml:"margin_edge"`
 	MarginSide int    `toml:"margin_side"`
 	Monitor    int    `toml:"monitor"`
@@ -58,13 +60,49 @@ type Modules struct {
 	Right  []string `toml:"right"`
 }
 
+// Popups -- выдвижные виджеты бара: календарь у часов, регулятор у громкости,
+// топ процессов у cpu и ram.
+type Popups struct {
+	Enabled  bool    `toml:"enabled"`
+	Width    int     `toml:"width"`
+	Gap      int     `toml:"gap"`
+	Padding  float64 `toml:"padding"`
+	Radius   float64 `toml:"radius"`
+	ProcRows int     `toml:"proc_rows"`
+}
+
 type Clock struct {
 	Format  string `toml:"format"`
 	OnClick string `toml:"on_click"`
 }
 
+// Music -- модуль проигрывателя. Название трека шире всего остального в баре,
+// поэтому единственная его настройка -- предел длины.
+type Music struct {
+	MaxChars int `toml:"max_chars"`
+}
+
 // Известные модули. Порядок задаёт порядок в палитре "доступные".
-var KnownModules = []string{"tags", "title", "cpu", "ram", "volume", "clock"}
+var KnownModules = []string{
+	"tags", "title", "cpu", "ram", "temp", "net", "music", "volume", "clock",
+}
+
+// Позиции бара в порядке, в котором они показываются в выпадающем списке.
+var Positions = []struct {
+	ID   string
+	Name string
+}{
+	{"top", "Сверху"},
+	{"bottom", "Снизу"},
+	{"left", "Слева"},
+	{"right", "Справа"},
+}
+
+// Vertical -- стоит ли бар у боковой кромки: от этого зависят подписи
+// «высота/ширина» и смысл зон модулей.
+func (b Bar) Vertical() bool {
+	return b.Position == "left" || b.Position == "right"
+}
 
 func DefaultConfig() Config {
 	return Config{
@@ -86,9 +124,14 @@ func DefaultConfig() Config {
 		Modules: Modules{
 			Left:   []string{"tags"},
 			Center: []string{"title"},
-			Right:  []string{"cpu", "ram", "volume", "clock"},
+			Right:  []string{"music", "net", "temp", "cpu", "ram", "volume", "clock"},
 		},
 		Clock: Clock{Format: "%a %d %b  %H:%M", OnClick: ""},
+		Music: Music{MaxChars: 32},
+		Popups: Popups{
+			Enabled: true, Width: 260, Gap: 6,
+			Padding: 12, Radius: 10, ProcRows: 5,
+		},
 	}
 }
 

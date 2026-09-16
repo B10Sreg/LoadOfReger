@@ -108,6 +108,33 @@ row.vxbar-module label.subtitle {
 	font-size: 0.85em;
 	opacity: 0.7;
 }
+
+/* Поле ввода в строках настроек. GTK4 всегда читает ~/.config/gtk-4.0/gtk.css,
+   независимо от GTK_THEME, и тема пользователя даёт entry рамку, фон и отступы
+   в 8px. В libadwaita поле внутри строки задумано плоским, и с чужими рамками
+   оно разрастается и накрывает подпись своим непрозрачным фоном. Возвращаем
+   плоский вид -- иначе половина строк во всём окне нечитаема. */
+row spinbutton:not(.vertical),
+row spinbutton > text,
+row entry {
+	border: none;
+	background: none;
+	box-shadow: none;
+	min-height: 0;
+	padding-left: 2px;
+	padding-right: 2px;
+}
+
+/* Кнопки -/+ у спинбокса от той же темы получают собственный фон и раздувают
+   строку по высоте. */
+row spinbutton button {
+	min-height: 0;
+	min-width: 24px;
+	padding: 0 2px;
+	background: none;
+	border: none;
+	box-shadow: none;
+}
 `, bg, fg, accent, card, radiusPx(cfg.Style.Radius))
 }
 

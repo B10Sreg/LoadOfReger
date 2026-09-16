@@ -21,11 +21,24 @@ type App struct {
 	path string
 	cfg  Config
 
+	// Настройки риса (тема, окна, композитор, сессия) живут в своём файле и
+	// применяются своим генератором, поэтому у них отдельный отложенный
+	// таймер: правка ползунка бара не должна дёргать picom.
+	rice          Rice
+	ricePendingID glib.SourceHandle
+
 	app *adw.Application
 	win *adw.PreferencesWindow
 
 	pendingID glib.SourceHandle
 	style     *styler
+
+	// Строки, подписи которых зависят от ориентации бара: у вертикального
+	// «высота» становится шириной, а зоны модулей -- верхом и низом.
+	zones    []*zone
+	thickRow *adw.SpinRow
+	edgeRow  *adw.SpinRow
+	sideRow  *adw.SpinRow
 }
 
 func main() {
@@ -46,6 +59,14 @@ func main() {
 	}
 	a.cfg = cfg
 
+	rice, riceErr := LoadRice()
+	if riceErr != nil {
+		// Настройки риса -- не повод не открыть настройки бара: показываем
+		// то, что прочиталось, и говорим о проблеме тостом.
+		log.Printf("vxbar-settings: rice.toml: %v", riceErr)
+	}
+	a.rice = rice
+
 	a.app = app
 	app.ConnectActivate(func() { a.build(err) })
 	if code := app.Run(os.Args); code > 0 {
@@ -61,20 +82,26 @@ func (a *App) build(loadErr error) {
 
 	a.win = adw.NewPreferencesWindow()
 	a.win.SetApplication(&a.app.Application)
-	a.win.SetTitle("Настройки vxbar")
-	a.win.SetDefaultSize(600, 720)
+	a.win.SetTitle("Настройки риса")
+	a.win.SetDefaultSize(760, 780)
 	a.win.SetSearchEnabled(true)
 
+	a.win.Add(a.pageTheme())
+	a.win.Add(a.pageCompositor())
 	a.win.Add(a.pageBar())
 	a.win.Add(a.pageStyle())
 	a.win.Add(a.pageTags())
 	a.win.Add(a.pageClock())
 	a.win.Add(a.pageModules())
+	a.win.Add(a.pageWidgets())
+	a.win.Add(a.pageSession())
+	a.applyOrientation()
 
 	// Правка, сделанная за миг до закрытия, иначе терялась: таймер на 180 мс
 	// не успевал сработать и умирал вместе с циклом событий.
 	a.win.ConnectCloseRequest(func() bool {
 		a.flush()
+		a.flushRice()
 		return false
 	})
 
@@ -98,18 +125,25 @@ func (a *App) pageBar() *adw.PreferencesPage {
 
 	pos := adw.NewComboRow()
 	pos.SetTitle("Сторона экрана")
-	pos.SetModel(gtk.NewStringList([]string{"Сверху", "Снизу"}))
-	if a.cfg.Bar.Position == "bottom" {
-		pos.SetSelected(1)
+	names := make([]string, len(Positions))
+	for i, p := range Positions {
+		names[i] = p.Name
+	}
+	pos.SetModel(gtk.NewStringList(names))
+	for i, p := range Positions {
+		if p.ID == a.cfg.Bar.Position {
+			pos.SetSelected(uint(i))
+		}
 	}
 	pos.Connect("notify::selected", func() {
-		a.edit(func() {
-			if pos.Selected() == 1 {
-				a.cfg.Bar.Position = "bottom"
-			} else {
-				a.cfg.Bar.Position = "top"
-			}
-		})
+		i := int(pos.Selected())
+		if i < 0 || i >= len(Positions) {
+			return
+		}
+		a.edit(func() { a.cfg.Bar.Position = Positions[i].ID })
+		// Слева/справа бар вертикальный: переименовываем всё, что от этого
+		// зависит, иначе «высота» у вертикальной панели читается как ошибка.
+		a.applyOrientation()
 	})
 	g.Add(pos)
 
@@ -128,15 +162,18 @@ func (a *App) pageBar() *adw.PreferencesPage {
 
 	gg := adw.NewPreferencesGroup()
 	gg.SetTitle("Размеры")
-	gg.Add(a.spin("Высота", "пикселей", 12, 96, 1, 0,
+	a.thickRow = a.spin("Высота", "пикселей", 12, 400, 1, 0,
 		float64(a.cfg.Bar.Height),
-		func(v float64) { a.cfg.Bar.Height = int(v) }))
-	gg.Add(a.spin("Отступ от края", "поднимает бар над краем экрана — «плавающий» вид", 0, 64, 1, 0,
+		func(v float64) { a.cfg.Bar.Height = int(v) })
+	a.edgeRow = a.spin("Отступ от края", "", 0, 64, 1, 0,
 		float64(a.cfg.Bar.MarginEdge),
-		func(v float64) { a.cfg.Bar.MarginEdge = int(v) }))
-	gg.Add(a.spin("Отступ по бокам", "сужает бар слева и справа", 0, 400, 1, 0,
+		func(v float64) { a.cfg.Bar.MarginEdge = int(v) })
+	a.sideRow = a.spin("Отступ по бокам", "", 0, 400, 1, 0,
 		float64(a.cfg.Bar.MarginSide),
-		func(v float64) { a.cfg.Bar.MarginSide = int(v) }))
+		func(v float64) { a.cfg.Bar.MarginSide = int(v) })
+	gg.Add(a.thickRow)
+	gg.Add(a.edgeRow)
+	gg.Add(a.sideRow)
 	page.Add(gg)
 
 	gt := adw.NewPreferencesGroup()
@@ -299,6 +336,73 @@ func (a *App) pageClock() *adw.PreferencesPage {
 	return page
 }
 
+// pageWidgets -- выдвижные виджеты: окошко, которое бар открывает рядом с
+// модулем по клику.
+func (a *App) pageWidgets() *adw.PreferencesPage {
+	page := adw.NewPreferencesPage()
+	page.SetTitle("Виджеты")
+	page.SetIconName("view-paged-symbolic")
+
+	g := adw.NewPreferencesGroup()
+	g.SetTitle("Выдвижные виджеты")
+	g.SetDescription("Клик по часам — календарь, по громкости — регулятор, по cpu и ram — топ процессов. " +
+		"Повторный клик или клик мимо закрывает.")
+
+	on := adw.NewSwitchRow()
+	on.SetTitle("Включить")
+	on.SetSubtitle("Выключенные модули остаются кликабельными только там, где есть быстрое действие")
+	on.SetActive(a.cfg.Popups.Enabled)
+	on.Connect("notify::active", func() {
+		a.edit(func() { a.cfg.Popups.Enabled = on.Active() })
+	})
+	g.Add(on)
+	page.Add(g)
+
+	gm := adw.NewPreferencesGroup()
+	gm.SetTitle("Геометрия")
+	gm.Add(a.spin("Ширина", "пикселей", 140, 600, 10, 0,
+		float64(a.cfg.Popups.Width), func(v float64) { a.cfg.Popups.Width = int(v) }))
+	gm.Add(a.spin("Зазор до бара", "", 0, 40, 1, 0,
+		float64(a.cfg.Popups.Gap), func(v float64) { a.cfg.Popups.Gap = int(v) }))
+	gm.Add(a.spin("Внутренние поля", "", 4, 40, 1, 0,
+		a.cfg.Popups.Padding, func(v float64) { a.cfg.Popups.Padding = v }))
+	gm.Add(a.spin("Скругление углов", "", 0, 24, 1, 0,
+		a.cfg.Popups.Radius, func(v float64) { a.cfg.Popups.Radius = v }))
+	page.Add(gm)
+
+	gc := adw.NewPreferencesGroup()
+	gc.SetTitle("Содержимое")
+	gc.Add(a.spin("Процессов в списке", "для виджетов cpu и ram", 1, 15, 1, 0,
+		float64(a.cfg.Popups.ProcRows), func(v float64) { a.cfg.Popups.ProcRows = int(v) }))
+	page.Add(gc)
+
+	return page
+}
+
+// applyOrientation переписывает подписи, у которых разный смысл для
+// горизонтального и вертикального бара.
+func (a *App) applyOrientation() {
+	vert := a.cfg.Bar.Vertical()
+	if a.thickRow != nil {
+		if vert {
+			a.thickRow.SetTitle("Ширина")
+			a.thickRow.SetSubtitle("пикселей поперёк бара")
+			a.edgeRow.SetSubtitle("отодвигает бар от боковой кромки — «плавающий» вид")
+			a.sideRow.SetSubtitle("укорачивает бар сверху и снизу")
+		} else {
+			a.thickRow.SetTitle("Высота")
+			a.thickRow.SetSubtitle("пикселей")
+			a.edgeRow.SetSubtitle("поднимает бар над краем экрана — «плавающий» вид")
+			a.sideRow.SetSubtitle("сужает бар слева и справа")
+		}
+	}
+	for _, z := range a.zones {
+		t, d := z.labels(vert)
+		z.group.SetTitle(t)
+		z.group.SetDescription(d)
+	}
+}
+
 // ------------------------------------------------------------- помощники UI
 
 // spin строит числовую строку со спинбоксом. onSet вызывается уже под a.edit,
@@ -319,7 +423,7 @@ func (a *App) spin(title, subtitle string, min, max, step float64, digits uint,
 	return row
 }
 
-// color строит строку с кнопкой выбора цвета, писающей результат прямо в
+// color строит строку с кнопкой выбора цвета, пишущей результат прямо в
 // переданное поле конфига. Указатель безопасен: a.cfg живёт столько же,
 // сколько окно, и заменяется целиком только в confirmReset — который
 // пересобирает окно.

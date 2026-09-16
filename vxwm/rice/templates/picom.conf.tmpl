@@ -1,0 +1,68 @@
+# Собран из rice.toml генератором apply.py. Правки затрутся.
+# Backend & Rendering
+backend = "glx";
+glx-no-stencil = true;
+glx-copy-from-front = false;
+use-damage = true;  # Перерисовываем только изменившееся. Раньше стояло false: старые
+                    # сборки picom так теряли анимацию закрытия окна. Здесь picom
+                    # vgit-df4c6, где damage-tracking с анимациями уживается, а
+                    # false заставлял GPU перерисовывать весь экран каждый кадр.
+                    # Если анимация закрытия всё же сломается -- вернуть false.
+vsync = {{VSYNC}};
+
+# Animations (Spring Physics)
+animations = {{ANIMATIONS}};
+animation-stiffness = 150.0;
+animation-dampening = 20.0;
+animation-clamping = false;
+animation-mass = 1.0;
+
+# --- Window Animations ---
+animation-for-open-window = "zoom";
+animation-for-unmap-window = "slide-down"; # Окна плавно уезжают вниз при закрытии
+
+# --- Workspace (Tag) Animations ---
+# Жесткий выезд сбоку при переключении тегов
+animation-for-workspace-switch-in = "slide-left";
+animation-for-workspace-switch-out = "slide-right";
+
+# Shadows & Blur
+shadow = {{SHADOW}};
+shadow-radius = {{SHADOW_RADIUS}};
+shadow-opacity = {{SHADOW_OPACITY}};
+shadow-offset-x = -{{SHADOW_RADIUS}};
+shadow-offset-y = -{{SHADOW_RADIUS}};
+shadow-exclude = [ "name = 'Notification'", "class_g = 'Rofi'" ];
+
+blur-method = "dual_kawase";
+blur-strength = {{BLUR_STRENGTH}};
+blur-background = {{BLUR}};
+# Бар (dock) теперь тоже размывается — раньше был в исключениях и оставался
+# полностью читаемым, но плоским; со стеклянным фоном смотрится живее.
+blur-background-exclude = [ "window_type = 'desktop'" ];
+
+# Fading & Opacity
+fading = {{FADING}};
+fade-in-step = 0.045;
+fade-out-step = 0.045;
+fade-delta = 6;
+corner-radius = {{CORNER_RADIUS}};
+rounded-corners-exclude = [ "window_type = 'dock'" ];
+
+wintypes:
+{
+  # Прозрачный + размытый бар вместо сплошной плашки
+  dock = { shadow = false; clip-shadow-above = true; opacity = {{BAR_OPACITY}}; blur-background = true; fade = true; }
+  dnd = { shadow = false; }
+  popup_menu = { opacity = 0.94; shadow = false; fade = true; }
+  dropdown_menu = { opacity = 0.94; shadow = false; fade = true; }
+};
+# --- Правила прозрачности для конкретных приложений ---
+opacity-rule = [
+  "85:class_g = 'Thunar'",
+  "85:class_g = 'Dolphin'", # На случай, если в config.h вызовется дефолтный файловый менеджер
+  "93:class_g = 'firefox'", /* Мягкая прозрачность для браузера */
+  "90:class_g = 'Rofi'",    /* Стеклянное меню запуска */
+  "88:class_g = 'vxwm'",    /* Сам бар: у него нет _NET_WM_WINDOW_TYPE=dock, поэтому таргетим по классу */
+  "95:class_g = 'Dunst'"    /* Лёгкая прозрачность у уведомлений */
+];

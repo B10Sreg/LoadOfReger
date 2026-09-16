@@ -4,28 +4,20 @@
 sleep 0.5
 
 RICE="$HOME/.config/vxwm-rice"
+VXWM_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 
-# 0. Цвета активной темы в X resources. vxwm читает их оттуда, а не из
-# config.h, поэтому merge здесь -- это и есть применение темы к окнам.
-# Делаем до всего остального: rofi и прочие тоже смотрят в Xresources.
-[ -f "$RICE/themes/current/colors.Xresources" ] \
-    && xrdb -merge "$RICE/themes/current/colors.Xresources"
+# Настройки сессии из единого конфига: интервал снимка, блокировка по простою.
+# Файл генерирует apply.py; без него работают значения по умолчанию.
+# shellcheck source=/dev/null
+[ -f "$RICE/session.env" ] && . "$RICE/session.env"
 
-# 1. Обои: берём из активной темы, если она выбрана, иначе — дефолтный файл
-WALL="$RICE/themes/current/wallpaper.png"
-[ -f "$WALL" ] || WALL="$HOME/Downloads/wallpaper.png"
-feh --bg-fill "$WALL" &
+# 1. Тема, окна, композитор, уведомления и обои -- одним вызовом. apply.py
+# разворачивает rice.toml во все конфиги и сам поднимает picom и dunst; до
+# него то же самое делали четыре куска этого файла, каждый со своей копией
+# путей и своим представлением о том, какая тема сейчас активна.
+"$VXWM_DIR/rice/apply.py" || echo "vxwm: apply.py не отработал" >&2
 
-# 2. Перезапускаем композитор с конфигом активной темы
-pkill -x picom
-sleep 0.3
-picom -b --config "$HOME/.config/picom/picom.conf" &
-
-# 3. Уведомления
-pkill -x dunst
-dunst &
-
-# 4. Бар. vxbar рисует всё сам (теги, заголовок, cpu/ram/громкость/часы) и
+# 2. Бар. vxbar рисует всё сам (теги, заголовок, cpu/ram/громкость/часы) и
 # резервирует место через _NET_WM_STRUT_PARTIAL, поэтому встроенный бар vxwm
 # выключен (showbar = 0 в config.h). Старый statusbar.sh больше не нужен:
 # он писал строку в имя root-окна, а vxbar читает свойства напрямую.
@@ -33,25 +25,24 @@ pkill -f vxwm-statusbar.sh
 pkill -x vxbar
 "$HOME/.local/bin/vxbar" &
 
-# 5. Блокировка экрана. xss-lock связывает две вещи: таймаут X-скринсейвера
+# 3. Блокировка экрана. xss-lock связывает две вещи: таймаут X-скринсейвера
 # (блокировка по простою) и сигнал засыпания от logind -- он придерживает
 # систему инхибитором, пока slock не встал, так что после пробуждения
 # рабочий стол не мелькает. Без пакета просто пропускаем: остальной рис от
 # этого не страдает, а ручная блокировка есть в power.sh.
-if command -v xss-lock >/dev/null 2>&1; then
+if [ "${VXWM_LOCK_ON_IDLE:-1}" = 1 ] && command -v xss-lock >/dev/null 2>&1; then
     pkill -x xss-lock
-    # 10 минут до гашения -- на этом же событии xss-lock поднимает slock.
-    xset s 600 600
+    # На этом же событии xss-lock поднимает slock. Время -- из rice.toml.
+    xset s "${VXWM_IDLE_SECONDS:-600}" "${VXWM_IDLE_SECONDS:-600}"
     xss-lock -l -- slock &
-else
+elif [ "${VXWM_LOCK_ON_IDLE:-1}" = 1 ]; then
     echo "vxwm: xss-lock не установлен, блокировка по простою отключена" >&2
 fi
 
-# 6. Сессия: возвращаем окна, открытые в прошлый раз, и дальше держим снимок
+# 4. Сессия: возвращаем окна, открытые в прошлый раз, и дальше держим снимок
 # свежим. Обе задачи в одном фоне и строго по очереди -- демон, стартовавший
 # посреди восстановления, записал бы полупустой список.
 # Выключается файлом ~/.config/vxwm-rice/no-session-restore.
-VXWM_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 pkill -f 'session-save\.sh --watch'
 (
     "$VXWM_DIR/session-restore.sh"

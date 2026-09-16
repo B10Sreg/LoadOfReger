@@ -1,0 +1,49 @@
+# Настройки риса: единственное место, которое правят руками.
+#
+# Всё остальное -- Xresources, picom.conf, rofi.rasi, kitty.conf, dunstrc,
+# цвета в vxbar -- из этого файла генерируется, см. apply.py. Поэтому править
+# сгенерированные конфиги бессмысленно: следующий apply их перепишет.
+#
+# Живой файл лежит в ~/.config/vxwm-rice/rice.toml; этот, в репозитории, --
+# значения по умолчанию и заодно документация.
+#
+#   apply.py          -- применить всё
+#   apply.py --theme  -- только тему (быстрее: не трогает композитор)
+
+[theme]
+# Имя палитры из rice/palettes. Обои берутся из themes/<имя>/wallpaper.png,
+# и если их нет -- остаются прежние.
+name = "carbon"
+
+[windows]
+# Зазор между окнами и толщина рамки. Едут через X resources, поэтому
+# меняются на лету: ни пересборки vxwm, ни перезапуска сессии.
+gap = 10
+border = 2
+
+[compositor]
+enabled = true
+vsync = true
+animations = true
+shadow = true
+shadow_radius = 18
+shadow_opacity = 0.4
+blur = true
+blur_strength = 6
+fading = true
+corner_radius = 8
+# Прозрачность бара. Сам бар -- это dock в терминах picom.
+bar_opacity = 0.88
+
+[session]
+# Восстанавливать окна прошлой сессии при входе.
+restore = true
+# Как часто демон переснимает список окон, секунды. Снимок нужен на случай,
+# когда гибернация не случилась: внезапное выключение, разряженный UPS.
+snapshot_interval = 20
+
+[power]
+# Блокировать экран по простою. Требует пакета xss-lock; без него настройка
+# просто не действует.
+lock_on_idle = true
+idle_seconds = 600

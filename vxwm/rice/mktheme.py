@@ -31,6 +31,9 @@ OUTPUTS = {
     "rofi.rasi.tmpl": "rofi.rasi",
     "kitty.conf.tmpl": "kitty.conf",
     "dunstrc.tmpl": "dunstrc",
+    "gtk.css.tmpl": "gtk.css",
+    "qtct-colors.conf.tmpl": "qtct-colors.conf",
+    "sddm-theme.conf.tmpl": "sddm-theme.conf",
 }
 
 
@@ -39,6 +42,15 @@ def rgb(hex_color: str) -> str:
     через rgba(), а hex с альфой он не понимает."""
     h = hex_color.lstrip("#")
     return ", ".join(str(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+
+
+# Прозрачность темы не касается: это настройка из [compositor] в rice.toml.
+# Здесь лежат умолчания на случай, когда mktheme зовут руками, без apply.py.
+DEFAULT_OPACITY = {
+    "TERMINAL_OPACITY": 0.75,
+    "MENU_OPACITY_PCT": 85,
+    "MENU_ALT_OPACITY_PCT": 77,
+}
 
 
 def substitutions(palette: dict) -> dict:
@@ -58,8 +70,15 @@ def substitutions(palette: dict) -> dict:
     subs.setdefault("DIM_BG", ui["norm_bg"])
     subs["DIM_BG_RGB"] = rgb(subs["DIM_BG"])
     subs["SEL_BG_RGB"] = rgb(ui["sel_bg"])
+    # Qt пишет цвета как #aarrggbb и без альфы файл схемы не читает. Добавляем
+    # непрозрачный вариант каждой роли отдельным именем.
+    for key in list(subs):
+        value = str(subs[key])
+        if value.startswith("#") and len(value) == 7:
+            subs[f"ARGB_{key}"] = "#ff" + value[1:]
     for i in range(16):
         subs[f"COLOR{i}"] = ansi[f"color{i}"]
+    subs.update(DEFAULT_OPACITY)
     return subs
 
 
@@ -76,7 +95,9 @@ def render(template: str, subs: dict) -> str:
     return out
 
 
-def build(name: str, dest_root: Path) -> list[str]:
+def build(name: str, dest_root: Path, extra: dict | None = None) -> list[str]:
+    """extra -- подстановки поверх палитры; через них apply.py передаёт
+    прозрачность из rice.toml, которая от темы не зависит."""
     path = PALETTES / f"{name}.toml"
     if not path.exists():
         raise SystemExit(f"нет палитры {path}")
@@ -91,6 +112,7 @@ def build(name: str, dest_root: Path) -> list[str]:
         raise SystemExit(f"{name}: в [ansi] должно быть ровно 16 цветов")
 
     subs = substitutions(palette)
+    subs.update(extra or {})
     dest = dest_root / name
     dest.mkdir(parents=True, exist_ok=True)
 

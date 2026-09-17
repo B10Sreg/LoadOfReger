@@ -1,4 +1,4 @@
-# Тема экрана входа. Собрана из палитры abyss генератором apply.py --
+# Тема экрана входа. Собрана из палитры {{NAME}} генератором apply.py --
 # правки затрутся, менять надо vxwm/rice/templates/sddm-theme.conf.tmpl.
 #
 # Файл читает греетер под root из /usr/share/sddm/themes/graphite/theme.conf,
@@ -7,20 +7,20 @@
 background=background.png
 
 # Фон и плашки -- те же роли, что у окон: фон обычного окна и фон активного.
-bgBase=#0f1a1f
-bgAlt=#1c2b33
+bgBase={{NORM_BG}}
+bgAlt={{SEL_BG}}
 
 # Текст: приглушённый для подписей, яркий для ввода, акцент для того, на что
 # смотрят -- часы, фокус, кнопка входа.
-fgBase=#7d94a0
-fgBright=#e3f0f3
-fgAccent=#58b8b0
-borderColor=#58b8b0
-placeholderColor=#4a5f6b
+fgBase={{NORM_FG}}
+fgBright={{SEL_FG}}
+fgAccent={{SEL_BORDER}}
+borderColor={{SEL_BORDER}}
+placeholderColor={{MUTED}}
 
 # Успех и отказ берём из палитры терминала: зелёный и красный там уже
 # подобраны под остальные цвета, а не взяты из ниоткуда.
-successColor=#6fb28a
-failureColor=#c96a6a
+successColor={{COLOR2}}
+failureColor={{COLOR1}}
 
 fontFamily=JetBrainsMono Nerd Font

@@ -1,0 +1,59 @@
+name: Что-то сломалось
+description: Рис не ставится, не запускается или ведёт себя не так
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что происходит
+      description: Что ожидал и что получил вместо этого
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      placeholder: |
+        1. ./install.sh
+        2. выйти и войти
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: gpu
+    attributes:
+      label: Видеокарта
+      options:
+        - AMD (amdgpu)
+        - NVIDIA (проприетарный драйвер)
+        - NVIDIA (nouveau)
+        - Intel
+        - другая / виртуальная машина
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Окружение
+      description: Вывод команд ниже
+      value: |
+        <details>
+
+        ```console
+        $ uname -a
+
+        $ pacman -Q picom kitty rofi dunst 2>/dev/null
+
+        $ cat ~/.config/vxwm-rice/rice.toml
+
+        ```
+
+        </details>
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи
+      description: |
+        `~/.xsession-errors`, вывод `vxwm-rice-apply`, `journalctl -b`, а если
+        падал композитор — `coredumpctl list | grep picom`.
+      render: shell

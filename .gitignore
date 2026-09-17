@@ -9,3 +9,9 @@ target/
 
 # Собранный бинарь приложения настроек
 vxbar-settings/vxbar-settings
+
+# Сборка vxwm. config.h и modules.h -- личные правки поверх *.def.h:
+# Makefile создаёт их при первой сборке, install.sh уважает уже существующие.
+vxwm-src/vxwm
+vxwm-src/config.h
+vxwm-src/modules.h

@@ -20,6 +20,7 @@ dunst -- они конфиг на лету не перечитывают.
 
 import argparse
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -421,6 +422,8 @@ def apply_compositor(cfg, r: Runner):
 
     subs = {
         "VSYNC": b("vsync"),
+        "BACKEND": c.get("backend", "glx"),
+        "USE_DAMAGE": b("use_damage"),
         "ANIMATIONS": b("animations"),
         "OPEN_ANIMATION": c.get("open_animation", "zoom"),
         "CLOSE_ANIMATION": c.get("close_animation", "slide-down"),
@@ -485,6 +488,7 @@ def apply_session(cfg, r: Runner):
     """Скрипты сессии читают не TOML, а простой env-файл: разбирать TOML в
     bash нечем, а source -- одна строка."""
     s, p = cfg["session"], cfg["power"]
+    inp = cfg.get("input", {})
     print("сессия и питание")
     env = (
         "# Собран из rice.toml генератором apply.py. Правки затрутся.\n"
@@ -494,6 +498,11 @@ def apply_session(cfg, r: Runner):
         f"export VXWM_SESSION_INTERVAL={int(s.get('snapshot_interval', 20))}\n"
         f"export VXWM_LOCK_ON_IDLE={1 if p.get('lock_on_idle', True) else 0}\n"
         f"export VXWM_IDLE_SECONDS={int(p.get('idle_seconds', 600))}\n"
+        # Раскладку применяет session.sh при старте сессии. Пустая строка --
+        # не трогать системную: на чужой машине рис не должен переучивать
+        # клавиатуру под себя.
+        f"export VXWM_KB_LAYOUT={shlex.quote(str(inp.get('layout', '')))}\n"
+        f"export VXWM_KB_OPTIONS={shlex.quote(str(inp.get('options', '')))}\n"
     )
     r.write(RICE_HOME / "session.env", env)
 

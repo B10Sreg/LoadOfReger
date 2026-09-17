@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  wm:
+    name: vxwm собирается
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Заголовки X11
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxft-dev libxinerama-dev
+      - name: make
+        # config.h и modules.h Makefile делает из *.def.h -- ровно то же, что
+        # при первой установке у человека.
+        run: make -C vxwm-src
+
+  bar:
+    name: vxbar собирается
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Зависимости cairo/pango/X11
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxinerama-dev \
+                                  libcairo2-dev libpango1.0-dev
+      - name: cargo build
+        # --locked: собираем ровно те версии, что зафиксированы в Cargo.lock.
+        run: cargo build --release --locked --manifest-path vxbar/Cargo.toml
+
+  settings:
+    name: vxbar-settings и его тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: vxbar-settings/go.mod
+      - name: Зависимости GTK4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev
+      - name: go vet
+        working-directory: vxbar-settings
+        run: go vet ./...
+      - name: go test
+        working-directory: vxbar-settings
+        run: go test ./...
+
+  rice:
+    name: Темы и конфиги разворачиваются
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Каждая палитра собирается в тему
+        # HOME во временный каталог: генератор пишет в ~/.config/vxwm-rice/themes,
+        # и трогать домашний каталог раннера незачем. Неподставленный плейсхолдер
+        # в любом шаблоне -- падение, ради этого проверка и существует.
+        run: |
+          export HOME=$(mktemp -d)
+          python3 vxwm/rice/mktheme.py
+      - name: rice.toml разворачивается целиком
+        run: |
+          export HOME=$(mktemp -d)
+          python3 vxwm/rice/apply.py --dry-run
+
+  shell:
+    name: Скрипты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        # -S error: ловим то, что действительно сломается, а не расхождения в
+        # стиле. -x: скрипты подключают session-lib.sh и session.env.
+        run: |
+          shellcheck --version
+          shellcheck -S error -x install.sh uninstall.sh \
+            vxwm/*.sh picom/*.sh sddm/install.sh vxbar/install.sh \
+            vxbar-settings/install.sh
+      - name: Синтаксис bash
+        run: |
+          for f in install.sh uninstall.sh vxwm/*.sh picom/*.sh sddm/install.sh \
+                   vxbar/install.sh vxbar-settings/install.sh zsh/zprofile x11/xprofile; do
+            bash -n "$f" || exit 1
+          done

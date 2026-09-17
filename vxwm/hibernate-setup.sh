@@ -15,10 +15,12 @@
 #   resume_offset -- для файла (а не раздела) ядро адресует не файл, а его
 #                    физическое смещение на диске: initramfs файловую систему
 #                    ещё не смонтировал и имени файла не знает;
-#   amdgpu        -- видеокарта здесь Radeon на amdgpu, ему для гибернации
-#                    ничего настраивать не нужно. Заодно выкидываем хвосты от
-#                    старой nvidia: модули, которых в системе нет, и параметр
-#                    nvidia_drm.modeset=1 -- на них ругается mkinitcpio.
+#   видеокарта    -- amdgpu и intel для гибернации не требуют ничего; nvidia
+#                    требует: её драйвер должен сохранить содержимое видеопамяти
+#                    (NVreg_PreserveVideoMemoryAllocations) и получить три
+#                    systemd-юнита, иначе после пробуждения вместо рабочего
+#                    стола будет чёрный экран. Карта определяется по загруженным
+#                    модулям; переопределить -- VXWM_GPU=nvidia|amdgpu|intel.
 #
 # Хук resume в mkinitcpio не нужен: initramfs здесь systemd-based (HOOKS=(base
 # systemd ...)), а systemd поднимает образ сам, увидев resume= в cmdline.
@@ -33,6 +35,19 @@ set -euo pipefail
 trap 'echo "ОШИБКА на строке $LINENO: $BASH_COMMAND (код $?)" >&2' ERR
 
 [ "$(id -u)" = 0 ] || { echo "нужен root: sudo bash $0" >&2; exit 1; }
+
+# --- видеокарта ---------------------------------------------------------------
+# Определяем по загруженным модулям, а не по lspci: важно, какой драйвер
+# реально работает, а не какое железо стоит в слоте (гибридные ноутбуки).
+detect_gpu() {
+    [ -n "${VXWM_GPU:-}" ] && { echo "$VXWM_GPU"; return; }
+    if [ -d /proc/driver/nvidia ] || lsmod | grep -q '^nvidia'; then echo nvidia
+    elif lsmod | grep -q '^amdgpu'; then echo amdgpu
+    elif lsmod | grep -qE '^(i915|xe)\b'; then echo intel
+    else echo unknown
+    fi
+}
+GPU=$(detect_gpu)
 
 SWAPFILE=${1:-/swapfile}
 case $SWAPFILE in
@@ -130,26 +145,74 @@ cmdline=$(grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub | cut -d'"' -f2)
 # Старые resume*-параметры выкидываем: после пересоздания swapfile смещение
 # другое, и оставшийся хвост увёл бы ядро не туда.
 cmdline=$(printf '%s\n' "$cmdline" | sed -E 's/ *resume(_offset)?=[^ ]*//g')
-# Карта давно amdgpu, а параметр остался от прежней nvidia и ничего не значит.
-cmdline=$(printf '%s\n' "$cmdline" | sed -E 's/ *nvidia[^ ]*//g')
+# Хвосты от драйвера, которого в системе нет, мешают mkinitcpio и ничего не
+# дают. На живой nvidia, наоборот, nvidia_drm.modeset=1 обязателен -- без него
+# не будет ни KMS, ни корректного пробуждения.
+if [ "$GPU" = nvidia ]; then
+    case $cmdline in
+        *nvidia_drm.modeset=1*|*nvidia-drm.modeset=1*) ;;
+        *) cmdline="$cmdline nvidia_drm.modeset=1" ;;
+    esac
+else
+    cmdline=$(printf '%s\n' "$cmdline" | sed -E 's/ *nvidia[^ ]*//g')
+fi
 cmdline="$cmdline resume=UUID=$swap_uuid resume_offset=$offset"
 cmdline=$(printf '%s\n' "$cmdline" | sed -E 's/^ +//; s/ +/ /g')
 
-cp /etc/default/grub /etc/default/grub.bak.$(date +%Y%m%d%H%M%S)
-sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$cmdline\"|" /etc/default/grub
+if [ -f /etc/default/grub ]; then
+    cp /etc/default/grub /etc/default/grub.bak.$(date +%Y%m%d%H%M%S)
+    sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$cmdline\"|" /etc/default/grub
+    step "grub-mkconfig"
+    grub-mkconfig -o /boot/grub/grub.cfg
+else
+    # systemd-boot, rEFInd, UKI: где лежит cmdline -- знает только хозяин
+    # машины, и угадывать здесь опаснее, чем попросить дописать руками.
+    cat >&2 <<EOF
 
-step "grub-mkconfig"
-grub-mkconfig -o /boot/grub/grub.cfg
+!! /etc/default/grub не найден -- загрузчик не GRUB, параметры ядра не тронуты.
+   Допиши в свой cmdline вручную и пересобери конфиг загрузчика:
 
-# --- mkinitcpio --------------------------------------------------------------
-# В MODULES прописаны nvidia-модули, которых в системе нет: mkinitcpio на
-# каждой сборке ругается, что не нашёл их. Меняем на amdgpu -- он и есть
-# реальный драйвер, а в initramfs нужен, чтобы KMS поднялся до монтирования
-# корня (хук kms в HOOKS уже стоит).
-step "mkinitcpio: nvidia-модули -> amdgpu"
-if grep -q '^MODULES=.*nvidia' /etc/mkinitcpio.conf; then
+       resume=UUID=$swap_uuid resume_offset=$offset
+EOF
+fi
+
+# --- драйвер видеокарты -------------------------------------------------------
+# Модуль карты нужен в initramfs, чтобы KMS поднялся до монтирования корня
+# (хук kms в HOOKS уже стоит), а для nvidia -- ещё и чтобы образ памяти
+# восстанавливался на том же драйвере, на котором снимался.
+case $GPU in
+    nvidia) want_modules='MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)' ;;
+    amdgpu) want_modules='MODULES=(amdgpu)' ;;
+    intel)  want_modules='MODULES=(i915)' ;;
+    *)      want_modules='' ;;
+esac
+
+if [ -n "$want_modules" ] && ! grep -qF "$want_modules" /etc/mkinitcpio.conf; then
+    step "mkinitcpio: $want_modules ($GPU)"
     cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.bak.$(date +%Y%m%d%H%M%S)
-    sed -i 's/^MODULES=.*/MODULES=(amdgpu)/' /etc/mkinitcpio.conf
+    sed -i "s/^MODULES=.*/$want_modules/" /etc/mkinitcpio.conf
+elif [ -z "$want_modules" ]; then
+    echo "видеокарта не опознана -- MODULES в mkinitcpio.conf не трогаю" >&2
+fi
+
+# --- nvidia: сохранение видеопамяти ------------------------------------------
+# Без этого гибернация на nvidia выглядит так: система засыпает и просыпается,
+# а вместо рабочего стола чёрный экран -- содержимое видеопамяти в образ не
+# попало. Параметр модуля говорит драйверу выгружать её, а три юнита делают
+# это в нужные моменты сна и пробуждения.
+if [ "$GPU" = nvidia ]; then
+    step "nvidia: сохранение видеопамяти при гибернации"
+    conf=/etc/modprobe.d/nvidia-power-management.conf
+    if ! grep -qs 'NVreg_PreserveVideoMemoryAllocations=1' "$conf"; then
+        printf 'options nvidia NVreg_PreserveVideoMemoryAllocations=1\n' >"$conf"
+        echo "  $conf"
+    fi
+    for unit in nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service; do
+        if systemctl list-unit-files "$unit" >/dev/null 2>&1 \
+           && ! systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+            systemctl enable "$unit" >/dev/null 2>&1 && echo "  включён $unit"
+        fi
+    done
 fi
 
 step "mkinitcpio -P"

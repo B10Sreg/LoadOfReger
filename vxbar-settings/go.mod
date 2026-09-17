@@ -1,4 +1,4 @@
-module github.com/B10Sreg/vxwm-rice/vxbar-settings
+module github.com/B10Sreg/LoadOfReger/vxbar-settings
 
 go 1.26.5
 

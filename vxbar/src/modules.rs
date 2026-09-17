@@ -397,7 +397,9 @@ impl TempSensors {
                 "coretemp" | "k10temp" | "zenpower" => cpu = Some(path("temp1_input")),
                 // У amdgpu temp1 -- edge, температура кристалла; junction и
                 // mem есть не на всех картах, поэтому берём то, что есть везде.
-                "amdgpu" | "nouveau" | "radeon" => gpu = Some(path("temp1_input")),
+                // "nvidia" -- проприетарный драйвер: он регистрирует hwmon
+                // под своим именем, а не под nouveau.
+                "amdgpu" | "nouveau" | "radeon" | "nvidia" => gpu = Some(path("temp1_input")),
                 _ => {}
             }
         }

@@ -1,0 +1,83 @@
+# ~/.zshrc для Load of Reger. Ставится только в режиме --fresh; если у тебя уже
+# есть свой, установщик спросит, прежде чем заменить (старый сохранит в .bak).
+#
+# Здесь нет фреймворков вроде oh-my-zsh: всё, ради чего их обычно ставят --
+# автодополнение, подсказки, подсветка, нормальная история -- есть в самом zsh
+# и в трёх пакетах из репозитория. Так оболочка стартует за миллисекунды и не
+# ломается от обновления чужого фреймворка.
+
+# --- История -----------------------------------------------------------------
+# Общая на все окна, но без перемешивания: каждая сессия дописывает свою,
+# а читает всё. Дубликаты не копим -- иначе поиск по истории забивается.
+HISTFILE=~/.zsh_history
+HISTSIZE=50000
+SAVEHIST=50000
+setopt APPEND_HISTORY INC_APPEND_HISTORY SHARE_HISTORY
+setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS
+
+# --- Навигация ---------------------------------------------------------------
+setopt AUTO_CD              # "dotfiles" вместо "cd dotfiles"
+setopt AUTO_PUSHD           # каждый cd кладёт каталог в стек
+setopt PUSHD_IGNORE_DUPS
+setopt EXTENDED_GLOB
+setopt INTERACTIVE_COMMENTS # # в командной строке -- комментарий, а не ошибка
+
+# --- Автодополнение ----------------------------------------------------------
+autoload -Uz compinit
+# Кеш дополнений пересобираем раз в сутки, а не на каждый запуск оболочки.
+if [[ -n ~/.zcompdump(#qN.mh+24) ]]; then compinit; else compinit -C; fi
+zstyle ':completion:*' menu select                    # стрелками по вариантам
+zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}' # без учёта регистра
+zstyle ':completion:*' group-name ''
+zstyle ':completion:*:descriptions' format '%F{yellow}%d%f'
+zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+
+# --- Клавиши -----------------------------------------------------------------
+bindkey -e                                  # emacs-раскладка, как в bash
+bindkey '^[[H' beginning-of-line
+bindkey '^[[F' end-of-line
+bindkey '^[[3~' delete-char
+bindkey '^[[1;5C' forward-word              # Ctrl+стрелка -- по словам
+bindkey '^[[1;5D' backward-word
+# Стрелки вверх/вниз ищут по уже набранному началу команды, а не листают всё.
+autoload -U up-line-or-beginning-search down-line-or-beginning-search
+zle -N up-line-or-beginning-search
+zle -N down-line-or-beginning-search
+bindkey '^[[A' up-line-or-beginning-search
+bindkey '^[[B' down-line-or-beginning-search
+
+# --- Приглашение -------------------------------------------------------------
+# Две строки: путь и ветка сверху, сам ввод снизу -- длинные команды не
+# прыгают по экрану. Ветка берётся встроенным vcs_info, без вызова git на
+# каждый Enter.
+autoload -Uz vcs_info
+zstyle ':vcs_info:git:*' formats ' %F{magenta}%b%f'
+zstyle ':vcs_info:git:*' actionformats ' %F{magenta}%b%f %F{red}(%a)%f'
+precmd() { vcs_info }
+setopt PROMPT_SUBST
+# %(?..) -- часть, которая появляется только если прошлая команда упала.
+PROMPT='%F{blue}%~%f${vcs_info_msg_0_}%(?.. %F{red}[%?]%f)
+%F{green}❯%f '
+
+# --- Псевдонимы --------------------------------------------------------------
+alias ls='ls --color=auto --group-directories-first'
+alias ll='ls -lh'
+alias la='ls -lha'
+alias grep='grep --color=auto'
+alias ip='ip -color=auto'
+alias ..='cd ..'
+alias ...='cd ../..'
+# Рис под рукой: применить настройки и сменить тему из терминала.
+alias rice='vxwm-rice-apply'
+alias rice-theme='vxwm-rice-apply --set-theme'
+
+# --- Плагины -----------------------------------------------------------------
+# Порядок важен: подсветка синтаксиса должна подключаться последней, иначе она
+# не увидит то, что навешали до неё.
+[ -r /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ] \
+    && . /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+[ -r /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] \
+    && . /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# Своё, не общее -- сюда: этот файл обновляется вместе с рисом.
+[ -r ~/.zshrc.local ] && . ~/.zshrc.local

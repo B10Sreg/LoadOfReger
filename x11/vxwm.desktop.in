@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=vxwm
+Comment=vxwm-rice: бесконечные теги, внешний бар, анимации
+Exec=@SESSION@
+TryExec=@SESSION@
+Type=Application
+DesktopNames=vxwm

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +18,11 @@ import (
 // и слали SIGUSR1, а бар на каждый сигнал пересоздаёт поверхность cairo.
 const applyDelayMS = 180
 
+// Настройки риса применяются реже: генератор перезапускает picom и dunst, и
+// экран на этом заметно моргает. Полсекунды -- это пауза, после которой драг
+// ползунка уже кончился, а не его середина.
+const riceDelayMS = 500
+
 type App struct {
 	path string
 	cfg  Config
@@ -26,12 +32,25 @@ type App struct {
 	// таймер: правка ползунка бара не должна дёргать picom.
 	rice          Rice
 	ricePendingID glib.SourceHandle
+	// Последнее применённое состояние риса и признак того, что оно есть:
+	// пустая структура -- законное значение, по ней одной не отличить
+	// «ещё ничего не применяли» от «применили пустое».
+	riceApplied Rice
+	riceValid   bool
+	// Генератор запускается в горутине, и пока он работает, следующий запуск
+	// ждёт в очереди -- один, самый свежий.
+	riceRunning     bool
+	riceQueued      bool
+	riceQueuedTheme bool
 
 	app *adw.Application
 	win *adw.PreferencesWindow
 
 	pendingID glib.SourceHandle
 	style     *styler
+	// TOML, который уже лежит в файле: по нему видно, что правка ничего не
+	// изменила и писать нечего.
+	lastSaved []byte
 
 	// Строки, подписи которых зависят от ориентации бара: у вертикального
 	// «высота» становится шириной, а зоны модулей -- верхом и низом.
@@ -58,6 +77,11 @@ func main() {
 		log.Printf("vxbar-settings: %v", err)
 	}
 	a.cfg = cfg
+	// Снимок того, что уже в файле: первая правка сравнивается с ним, а не с
+	// пустотой.
+	if data, mErr := Marshal(cfg); mErr == nil && err == nil {
+		a.lastSaved = data
+	}
 
 	rice, riceErr := LoadRice()
 	if riceErr != nil {
@@ -93,6 +117,7 @@ func (a *App) build(loadErr error) {
 	a.win.Add(a.pageTags())
 	a.win.Add(a.pageClock())
 	a.win.Add(a.pageModules())
+	a.win.Add(a.pagePower())
 	a.win.Add(a.pageWidgets())
 	a.win.Add(a.pageSession())
 	a.applyOrientation()
@@ -101,7 +126,7 @@ func (a *App) build(loadErr error) {
 	// не успевал сработать и умирал вместе с циклом событий.
 	a.win.ConnectCloseRequest(func() bool {
 		a.flush()
-		a.flushRice()
+		a.flushRice(true)
 		return false
 	})
 
@@ -153,6 +178,12 @@ func (a *App) pageBar() *adw.PreferencesPage {
 	mon.SetModel(gtk.NewStringList(mons))
 	if a.cfg.Bar.Monitor < len(mons) {
 		mon.SetSelected(uint(a.cfg.Bar.Monitor))
+	} else {
+		// Монитор из конфига отключили. Список показывал бы первый, а в файле
+		// оставался бы недостижимый индекс -- и бар не поднимался бы там, где
+		// его показывают настройки.
+		mon.SetSelected(0)
+		a.edit(func() { a.cfg.Bar.Monitor = 0 })
 	}
 	mon.Connect("notify::selected", func() {
 		a.edit(func() { a.cfg.Bar.Monitor = int(mon.Selected()) })
@@ -235,7 +266,11 @@ func (a *App) pageStyle() *adw.PreferencesPage {
 
 	gr := adw.NewPreferencesGroup()
 	reset := adw.NewActionRow()
-	reset.SetTitle("Сбросить всё на значения по умолчанию")
+	// Кнопка живёт на странице бара и сбрасывает только его конфиг. Раньше
+	// подпись обещала «всё», а настройки риса (тема, окна, композитор,
+	// сессия) лежат в другом файле и не трогались.
+	reset.SetTitle("Сбросить настройки бара")
+	reset.SetSubtitle("Тема, окна и композитор останутся как есть — они в rice.toml")
 	rb := gtk.NewButtonWithLabel("Сбросить")
 	rb.SetVAlign(gtk.AlignCenter)
 	rb.AddCSSClass("destructive-action")
@@ -275,6 +310,13 @@ func (a *App) pageTags() *adw.PreferencesPage {
 	gb.Add(a.spin("Поля вокруг тега", "", 0, 40, 1, 0,
 		a.cfg.Tags.ItemPadding, func(v float64) { a.cfg.Tags.ItemPadding = v }))
 
+	// Направление переезда задаёт сам бар: у горизонтального плашка едет
+	// влево-вправо, у вертикального -- вверх-вниз, так что настраивать тут
+	// нечего, кроме длительности.
+	gb.Add(a.spin("Анимация переключения", "Миллисекунды на переезд к соседнему тегу; дальние едут дольше, 0 — мгновенно",
+		0, 1000, 10, 0,
+		float64(a.cfg.Tags.AnimMS), func(v float64) { a.cfg.Tags.AnimMS = int(v) }))
+
 	labels := adw.NewEntryRow()
 	labels.SetTitle("Подписи тегов")
 	labels.SetText(joinLabels(a.cfg.Tags.Labels))
@@ -308,30 +350,69 @@ func (a *App) pageClock() *adw.PreferencesPage {
 	gc.SetTitle("Отображение")
 	gc.SetDescription("Формат strftime: %H:%M -- часы и минуты, %a %d %b -- день недели и дата")
 
-	fmtRow := adw.NewEntryRow()
-	fmtRow.SetTitle("Формат (strftime)")
-	fmtRow.SetText(a.cfg.Clock.Format)
-	fmtRow.SetShowApplyButton(true)
-	applyFmt := func() {
-		v := fmtRow.Text()
-		a.edit(func() { a.cfg.Clock.Format = v })
-	}
-	fmtRow.ConnectApply(applyFmt)
-	fmtRow.ConnectEntryActivated(applyFmt)
-	gc.Add(fmtRow)
-
-	clickRow := adw.NewEntryRow()
-	clickRow.SetTitle("Команда по клику на часы")
-	clickRow.SetText(a.cfg.Clock.OnClick)
-	clickRow.SetShowApplyButton(true)
-	applyClick := func() {
-		v := clickRow.Text()
-		a.edit(func() { a.cfg.Clock.OnClick = v })
-	}
-	clickRow.ConnectApply(applyClick)
-	clickRow.ConnectEntryActivated(applyClick)
-	gc.Add(clickRow)
+	gc.Add(a.entry("Формат (strftime)", "У вертикального бара строка разбирается на строки по пробелам и двоеточию",
+		a.cfg.Clock.Format, func(v string) { a.cfg.Clock.Format = v }))
+	gc.Add(a.entry("Команда по клику на часы", "Пусто — открывать встроенный календарь",
+		a.cfg.Clock.OnClick, func(v string) { a.cfg.Clock.OnClick = v }))
 	page.Add(gc)
+
+	return page
+}
+
+// pagePower -- команды модуля power. Отдельная страница, а не строка в
+// «Модулях»: команд пять, и каждая из них умеет увести сессию.
+func (a *App) pagePower() *adw.PreferencesPage {
+	page := adw.NewPreferencesPage()
+	page.SetTitle("Питание")
+	page.SetIconName("system-shutdown-symbolic")
+
+	g := adw.NewPreferencesGroup()
+	g.SetTitle("Кнопка питания")
+	g.SetDescription("Модуль power. Клик по нему открывает список, строка запускает свою команду. " +
+		"Пустая строка убирает пункт из списка.")
+
+	type field struct {
+		title, subtitle string
+		get             func() string
+		set             func(string)
+	}
+	fields := []field{
+		{"Гибернация", "Сохраняет память на диск: после включения возвращается вся сессия",
+			func() string { return a.cfg.Power.Hibernate },
+			func(v string) { a.cfg.Power.Hibernate = v }},
+		{"Сон", "Питание остаётся на памяти",
+			func() string { return a.cfg.Power.Suspend },
+			func(v string) { a.cfg.Power.Suspend = v }},
+		{"Блокировка", "",
+			func() string { return a.cfg.Power.Lock },
+			func(v string) { a.cfg.Power.Lock = v }},
+		{"Перезагрузка", "",
+			func() string { return a.cfg.Power.Reboot },
+			func(v string) { a.cfg.Power.Reboot = v }},
+		{"Выключение", "",
+			func() string { return a.cfg.Power.Poweroff },
+			func(v string) { a.cfg.Power.Poweroff = v }},
+	}
+	for _, f := range fields {
+		g.Add(a.entry(f.title, f.subtitle, f.get(), f.set))
+	}
+	page.Add(g)
+
+	gh := adw.NewPreferencesGroup()
+	def := adw.NewActionRow()
+	def.SetTitle("Вернуть команды по умолчанию")
+	def.SetSubtitle("power.sh из vxwm: снимает слепок сессии и проверяет swap перед гибернацией")
+	rb := gtk.NewButtonWithLabel("Вернуть")
+	rb.SetVAlign(gtk.AlignCenter)
+	rb.ConnectClicked(func() {
+		a.edit(func() { a.cfg.Power = DefaultPower() })
+		// Поля держат старый текст: строки собраны один раз, и обновить их
+		// проще пересборкой окна, чем ручным обходом каждой.
+		a.rebuildWindow()
+	})
+	def.AddSuffix(rb)
+	gh.Add(def)
+	page.Add(gh)
 
 	return page
 }
@@ -423,6 +504,28 @@ func (a *App) spin(title, subtitle string, min, max, step float64, digits uint,
 	return row
 }
 
+// entry строит строку ввода с кнопкой применения. Текст уходит в конфиг по
+// Enter или по кнопке, а не на каждый символ: иначе бар перечитывал бы конфиг
+// на каждую букву пути или команды.
+func (a *App) entry(title, subtitle, val string, onSet func(string)) *adw.EntryRow {
+	row := adw.NewEntryRow()
+	row.SetTitle(title)
+	if subtitle != "" {
+		// EntryRow не показывает подзаголовок, поэтому подсказка идёт
+		// всплывающей: место под строкой занято самим полем ввода.
+		row.SetTooltipText(subtitle)
+	}
+	row.SetText(val)
+	row.SetShowApplyButton(true)
+	apply := func() {
+		v := row.Text()
+		a.edit(func() { onSet(v) })
+	}
+	row.ConnectApply(apply)
+	row.ConnectEntryActivated(apply)
+	return row
+}
+
 // color строит строку с кнопкой выбора цвета, пишущей результат прямо в
 // переданное поле конфига. Указатель безопасен: a.cfg живёт столько же,
 // сколько окно, и заменяется целиком только в confirmReset — который
@@ -478,10 +581,22 @@ func (a *App) flush() {
 }
 
 func (a *App) applyNow() {
-	if err := Save(a.path, a.cfg); err != nil {
+	data, err := Marshal(a.cfg)
+	if err != nil {
 		a.toast(fmt.Sprintf("Не сохранилось: %v", err))
 		return
 	}
+	// Ползунок, вернувшийся в исходное значение, и повторное «Применить» с тем
+	// же текстом не должны стоить ни записи, ни сигнала: на SIGUSR1 бар
+	// пересоздаёт поверхность и заново поднимает шрифт, и это видно глазом.
+	if a.lastSaved != nil && bytes.Equal(a.lastSaved, data) {
+		return
+	}
+	if err := SaveBytes(a.path, data); err != nil {
+		a.toast(fmt.Sprintf("Не сохранилось: %v", err))
+		return
+	}
+	a.lastSaved = data
 	if err := Reload(); err != nil {
 		a.toast(fmt.Sprintf("Сохранено, но бар не перечитал: %v", err))
 	}
@@ -496,8 +611,9 @@ func (a *App) toast(msg string) {
 }
 
 func (a *App) confirmReset() {
-	d := adw.NewAlertDialog("Сбросить настройки?",
-		"Все значения вернутся к заводским. Текущий "+a.path+" будет перезаписан.")
+	d := adw.NewAlertDialog("Сбросить настройки бара?",
+		"Настройки бара вернутся к заводским, "+a.path+" будет перезаписан. "+
+			"Тема, окна, композитор и сессия не изменятся.")
 	d.AddResponse("cancel", "Отмена")
 	d.AddResponse("reset", "Сбросить")
 	d.SetResponseAppearance("reset", adw.ResponseDestructive)
@@ -509,15 +625,26 @@ func (a *App) confirmReset() {
 		}
 		a.cfg = DefaultConfig()
 		a.applyNow()
-		// Виджеты держат старые значения, а привязка к полям — по указателям
-		// на прежний a.cfg. Пересобираем окно целиком: дешевле и надёжнее,
-		// чем обходить каждую строку и глушить её сигналы.
-		old := a.win
-		a.win = nil
-		old.Close()
-		a.build(nil)
+		a.rebuildWindow()
 	})
 	d.Present(a.win)
+}
+
+// rebuildWindow пересобирает окно поверх текущего конфига. Нужна там, где
+// значения поменялись мимо виджетов (сброс настроек, возврат команд питания):
+// строки держат старый текст, а привязка к полям идёт по указателям на прежний
+// a.cfg. Пересобрать целиком дешевле и надёжнее, чем обходить каждую строку и
+// глушить её сигналы.
+//
+// Новое окно поднимаем до закрытия старого: закрыть единственное окно
+// приложения значит дать GApplication повод завершиться, и настройки просто
+// исчезали бы вместо пересборки.
+func (a *App) rebuildWindow() {
+	old := a.win
+	a.build(nil)
+	if old != nil {
+		old.Close()
+	}
 }
 
 func monitorNames() []string {

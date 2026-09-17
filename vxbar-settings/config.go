@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -22,6 +24,8 @@ type Config struct {
 	Clock   Clock   `toml:"clock"`
 	Popups  Popups  `toml:"popups"`
 	Music   Music   `toml:"music"`
+	Power   Power   `toml:"power"`
+	Disk    Disk    `toml:"disk"`
 }
 
 type Bar struct {
@@ -52,6 +56,7 @@ type Tags struct {
 	EmptyFG     string   `toml:"empty_fg"`
 	HideEmpty   bool     `toml:"hide_empty"`
 	ItemPadding float64  `toml:"item_padding"`
+	AnimMS      int      `toml:"anim_ms"` // переезд плашки активного тега, мс; 0 -- без анимации
 }
 
 type Modules struct {
@@ -82,9 +87,26 @@ type Music struct {
 	MaxChars int `toml:"max_chars"`
 }
 
+// Power -- команды кнопки питания (модуль power). Строки уходят в sh, поэтому
+// сюда можно вписать что угодно, хоть свой скрипт.
+type Power struct {
+	Hibernate string `toml:"hibernate"`
+	Suspend   string `toml:"suspend"`
+	Lock      string `toml:"lock"`
+	Reboot    string `toml:"reboot"`
+	Poweroff  string `toml:"poweroff"`
+}
+
+// Disk -- модуль свободного места. Показывает раздел, которому принадлежит
+// путь: "/" -- корень, "$HOME" -- тот раздел, где лежит домашний каталог.
+type Disk struct {
+	Path string `toml:"path"`
+}
+
 // Известные модули. Порядок задаёт порядок в палитре "доступные".
 var KnownModules = []string{
-	"tags", "title", "cpu", "ram", "temp", "net", "music", "volume", "clock",
+	"tags", "title", "cpu", "ram", "temp", "net", "disk", "music",
+	"volume", "mic", "battery", "uptime", "clock", "power",
 }
 
 // Позиции бара в порядке, в котором они показываются в выпадающем списке.
@@ -119,7 +141,7 @@ func DefaultConfig() Config {
 		Tags: Tags{
 			Labels: []string{}, ActiveBG: "#2a2a2d", ActiveFG: "#c0c0c0",
 			OccupiedFG: "#8a8a8e", EmptyFG: "#5a5a5e",
-			HideEmpty: false, ItemPadding: 9,
+			HideEmpty: false, ItemPadding: 9, AnimMS: 160,
 		},
 		Modules: Modules{
 			Left:   []string{"tags"},
@@ -127,11 +149,26 @@ func DefaultConfig() Config {
 			Right:  []string{"music", "net", "temp", "cpu", "ram", "volume", "clock"},
 		},
 		Clock: Clock{Format: "%a %d %b  %H:%M", OnClick: ""},
+		Power: DefaultPower(),
+		Disk:  Disk{Path: "/"},
 		Music: Music{MaxChars: 32},
 		Popups: Popups{
 			Enabled: true, Width: 260, Gap: 6,
 			Padding: 12, Radius: 10, ProcRows: 5,
 		},
+	}
+}
+
+// DefaultPower зеркалит config.rs: по умолчанию зовём power.sh из vxwm -- он
+// снимает слепок сессии и проверяет, что гибернации есть куда писать.
+func DefaultPower() Power {
+	const vxwm = "$HOME/dotfiles/vxwm/power.sh"
+	return Power{
+		Hibernate: vxwm + " hibernate",
+		Suspend:   "systemctl suspend",
+		Lock:      vxwm + " lock",
+		Reboot:    vxwm + " reboot",
+		Poweroff:  vxwm + " poweroff",
 	}
 }
 
@@ -164,15 +201,25 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// Marshal отдаёт тот же TOML, что ушёл бы в файл. Вынесено из Save, чтобы
+// вызывающий мог сравнить результат с уже записанным и не трогать файл, когда
+// ничего не поменялось: каждая запись тянет за собой SIGUSR1, а на нём бар
+// пересоздаёт поверхность cairo и заново поднимает шрифт.
+func Marshal(cfg Config) ([]byte, error) { return toml.Marshal(cfg) }
+
 // Save пишет через временный файл рядом с целевым и переименовывает: vxbar
 // может читать конфиг ровно в этот момент (SIGUSR1 от другого процесса), и
 // обрывок TOML заставил бы его откатиться на дефолты.
 func Save(path string, cfg Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	data, err := Marshal(cfg)
+	if err != nil {
 		return err
 	}
-	data, err := toml.Marshal(cfg)
-	if err != nil {
+	return SaveBytes(path, data)
+}
+
+func SaveBytes(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config.toml.*")
@@ -196,14 +243,44 @@ func Save(path string, cfg Config) error {
 
 // Reload просит работающий бар перечитать конфиг. Отсутствие процесса — не
 // ошибка: настройки можно править и при выключенном баре.
+//
+// Сигнал шлём сами, а не через pkill: правка ползунка за один драг даёт
+// несколько применений, и каждое стоило форка с exec ради одного kill(2).
 func Reload() error {
-	out, err := exec.Command("pkill", "-USR1", "-x", "vxbar").CombinedOutput()
+	pids, err := barPIDs()
 	if err != nil {
-		// pkill возвращает 1, когда не нашёл ни одного процесса
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return nil
+		return err
+	}
+	for _, pid := range pids {
+		// ESRCH -- процесс успел уйти между чтением /proc и сигналом; это не
+		// ошибка настроек, бар просто закрыли.
+		if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil && err != syscall.ESRCH {
+			return fmt.Errorf("сигнал процессу %d: %w", pid, err)
 		}
-		return fmt.Errorf("pkill: %v: %s", err, out)
 	}
 	return nil
+}
+
+// barPIDs -- процессы с именем vxbar. Имя берём из /proc/<pid>/comm: оно
+// обрезано до 15 символов, но "vxbar" в них помещается целиком.
+func barPIDs() ([]int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	var out []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		comm, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
+		if err != nil {
+			continue // процесс ушёл, пока мы шли по каталогу
+		}
+		if strings.TrimSpace(string(comm)) == "vxbar" {
+			out = append(out, pid)
+		}
+	}
+	return out, nil
 }

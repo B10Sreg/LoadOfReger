@@ -73,14 +73,18 @@ func (a *App) pageModules() *adw.PreferencesPage {
 	}
 	rebuild()
 
-	// Настройки отдельных модулей. Пока такая одна, но группа нужна: иначе
-	// строка висела бы под зонами без объяснения, к чему она относится.
+	// Настройки отдельных модулей: то, что относится к одному модулю и не
+	// стоит собственной страницы. Команды кнопки питания стоят -- их пять, и
+	// они живут на странице «Питание».
 	opts := adw.NewPreferencesGroup()
 	opts.SetTitle("Настройки модулей")
 	opts.Add(a.spin("Музыка: длина названия",
 		"Символов, дальше обрезается многоточием", 8, 80, 1, 0,
 		float64(a.cfg.Music.MaxChars),
 		func(v float64) { a.cfg.Music.MaxChars = int(v) }))
+	opts.Add(a.entry("Диск: что показывать",
+		"Путь; модуль покажет свободное место на разделе, которому он принадлежит",
+		a.cfg.Disk.Path, func(v string) { a.cfg.Disk.Path = v }))
 	page.Add(opts)
 
 	return page
@@ -103,6 +107,11 @@ func (a *App) fillZone(z *zone, all []*zone, rebuild func()) {
 		// По этому классу style.go находит строки модулей: подзаголовок здесь
 		// -- идентификатор из TOML, и его рисуем моноширинным.
 		row.AddCSSClass("vxbar-module")
+		// Подзаголовок занят идентификатором из TOML, поэтому что модуль
+		// показывает и что умеет по клику -- во всплывающей подсказке.
+		if h := moduleHint(id); h != "" {
+			row.SetTooltipText(h)
+		}
 
 		box := gtk.NewBox(gtk.OrientationHorizontal, 4)
 		box.SetVAlign(gtk.AlignCenter)
@@ -193,6 +202,9 @@ func (a *App) addPopover(z *zone, free []string, rebuild func()) *gtk.Popover {
 		b := gtk.NewButtonWithLabel(moduleTitle(id))
 		b.AddCSSClass("flat")
 		b.SetHAlign(gtk.AlignFill)
+		if h := moduleHint(id); h != "" {
+			b.SetTooltipText(h)
+		}
 		if c := b.Child(); c != nil {
 			if lbl, ok := c.(*gtk.Label); ok {
 				lbl.SetXAlign(0)

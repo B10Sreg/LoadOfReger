@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -33,33 +34,86 @@ func (a *App) scheduleRiceApply() {
 	if a.ricePendingID != 0 {
 		glib.SourceRemove(a.ricePendingID)
 	}
-	a.ricePendingID = glib.TimeoutAdd(applyDelayMS, func() bool {
+	a.ricePendingID = glib.TimeoutAdd(riceDelayMS, func() bool {
 		a.ricePendingID = 0
 		a.applyRiceNow(false)
 		return false
 	})
 }
 
-func (a *App) flushRice() {
+// flushRice досрочно применяет отложенную правку. sync -- дождаться генератора
+// на месте: при закрытии окна ждать некому, а асинхронный запуск остался бы
+// сиротой на полпути.
+func (a *App) flushRice(sync bool) {
 	if a.ricePendingID == 0 {
 		return
 	}
 	glib.SourceRemove(a.ricePendingID)
 	a.ricePendingID = 0
+	if sync {
+		if err := SaveRice(a.rice); err != nil {
+			a.toast(fmt.Sprintf("Не сохранилось: %v", err))
+			return
+		}
+		a.riceApplied, a.riceValid = a.rice, true
+		if err := ApplyRice(false); err != nil {
+			log.Printf("vxbar-settings: %v", err)
+		}
+		return
+	}
 	a.applyRiceNow(false)
 }
 
 // applyRiceNow пишет конфиг и разворачивает его. Генератор перезапускает picom
 // и dunst, поэтому themeOnly бережёт от лишних морганий, когда менялась только
 // тема.
+//
+// Сам генератор работает в отдельной горутине: он перезапускает композитор,
+// ждёт, пока старый процесс отпустит экран, и поднимает новый -- около секунды,
+// в течение которой синхронный вызов держал окно настроек замороженным. В
+// главный цикл возвращаемся через IdleAdd, там и показываем ошибку.
 func (a *App) applyRiceNow(themeOnly bool) {
+	// Ползунок, вернувшийся в исходное положение, не должен стоить перезапуска
+	// композитора: сравниваем с тем, что уже применено. Тему проверяем отдельно
+	// -- она меняет файлы помимо rice.toml (обои, Xresources), и повторное
+	// применение той же темы имеет смысл как способ вернуть их на место.
+	if !themeOnly && a.riceValid && a.rice == a.riceApplied {
+		return
+	}
 	if err := SaveRice(a.rice); err != nil {
 		a.toast(fmt.Sprintf("Не сохранилось: %v", err))
 		return
 	}
-	if err := ApplyRice(themeOnly); err != nil {
-		a.toast(fmt.Sprintf("Сохранено, но не применилось: %v", err))
+	a.riceApplied, a.riceValid = a.rice, true
+
+	if a.riceRunning {
+		// Пока генератор работает, ставим в очередь ровно один следующий
+		// запуск: промежуточные состояния ползунка применять уже незачем,
+		// файл всё равно перечитается на старте.
+		a.riceQueued = true
+		a.riceQueuedTheme = a.riceQueuedTheme && themeOnly
+		return
 	}
+	a.riceRunning = true
+	a.riceQueuedTheme = true
+	go func() {
+		err := ApplyRice(themeOnly)
+		glib.IdleAdd(func() {
+			a.riceRunning = false
+			if err != nil {
+				a.toast(fmt.Sprintf("Сохранено, но не применилось: %v", err))
+			}
+			if a.riceQueued {
+				a.riceQueued = false
+				queuedTheme := a.riceQueuedTheme
+				// Очередной запуск нужен независимо от того, поменялось ли
+				// что-то с прошлого: в очередь он попал как раз потому, что
+				// поменялось.
+				a.riceValid = false
+				a.applyRiceNow(queuedTheme)
+			}
+		})
+	}()
 }
 
 // ------------------------------------------------------------------- тема
@@ -87,10 +141,21 @@ func (a *App) pageTheme() *adw.PreferencesPage {
 	combo := adw.NewComboRow()
 	combo.SetTitle("Тема")
 	combo.SetModel(gtk.NewStringList(names))
+	// Темы из конфига может не быть среди палитр: её переименовали или
+	// удалили. Тогда показываем первую и говорим об этом -- иначе список
+	// молча стоял бы на чужой теме, а в файле осталось бы несуществующее имя.
+	shown := a.rice.Theme.Name
+	missing := true
 	for i, n := range names {
 		if n == a.rice.Theme.Name {
 			combo.SetSelected(uint(i))
+			missing = false
+			break
 		}
+	}
+	if missing {
+		combo.SetSelected(0)
+		shown = names[0]
 	}
 
 	// Описание и образцы обновляются вместе с выбором, поэтому держим их
@@ -131,10 +196,20 @@ func (a *App) pageTheme() *adw.PreferencesPage {
 			wallRow.SetSubtitle("нет файла — останутся прежние")
 		}
 	}
-	refresh(a.rice.Theme.Name)
+	refresh(shown)
+	if missing {
+		a.toast(fmt.Sprintf("Тема %q не найдена среди палитр, показана %s",
+			a.rice.Theme.Name, shown))
+	}
 
 	combo.Connect("notify::selected", func() {
-		name := names[combo.Selected()]
+		// Тема из конфига могла не найтись среди палитр -- тогда в списке
+		// ничего не выбрано, и Selected() отдаёт GTK_INVALID_LIST_POSITION.
+		i := int(combo.Selected())
+		if i < 0 || i >= len(names) {
+			return
+		}
+		name := names[i]
 		if name == a.rice.Theme.Name {
 			return
 		}
@@ -235,6 +310,18 @@ func (a *App) pageCompositor() *adw.PreferencesPage {
 	blur.Add(a.riceSpin("Непрозрачность бара", "1.0 — полностью непрозрачный", 0.1, 1, 0.02, 2,
 		a.rice.Compositor.BarOpacity,
 		func(v float64) { a.rice.Compositor.BarOpacity = v }))
+	blur.Add(a.riceSpin("Непрозрачность окон", "Файловые менеджеры, браузер и прочие окна в фокусе",
+		0.1, 1, 0.02, 2, a.rice.Compositor.WindowOpacity,
+		func(v float64) { a.rice.Compositor.WindowOpacity = v }))
+	blur.Add(a.riceSpin("Непрозрачность неактивных окон", "Приглушает всё, что не в фокусе",
+		0.1, 1, 0.02, 2, a.rice.Compositor.InactiveOpacity,
+		func(v float64) { a.rice.Compositor.InactiveOpacity = v }))
+	blur.Add(a.riceSpin("Непрозрачность терминала", "Через background_opacity самого kitty: текст остаётся чётким",
+		0.1, 1, 0.02, 2, a.rice.Compositor.TerminalOpacity,
+		func(v float64) { a.rice.Compositor.TerminalOpacity = v }))
+	blur.Add(a.riceSpin("Непрозрачность меню", "rofi, выпадающие меню, уведомления",
+		0.1, 1, 0.02, 2, a.rice.Compositor.MenuOpacity,
+		func(v float64) { a.rice.Compositor.MenuOpacity = v }))
 	page.Add(blur)
 
 	return page

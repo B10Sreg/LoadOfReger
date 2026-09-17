@@ -33,17 +33,21 @@ type Rice struct {
 	} `toml:"windows"`
 
 	Compositor struct {
-		Enabled       bool    `toml:"enabled"`
-		Vsync         bool    `toml:"vsync"`
-		Animations    bool    `toml:"animations"`
-		Shadow        bool    `toml:"shadow"`
-		ShadowRadius  int     `toml:"shadow_radius"`
-		ShadowOpacity float64 `toml:"shadow_opacity"`
-		Blur          bool    `toml:"blur"`
-		BlurStrength  int     `toml:"blur_strength"`
-		Fading        bool    `toml:"fading"`
-		CornerRadius  int     `toml:"corner_radius"`
-		BarOpacity    float64 `toml:"bar_opacity"`
+		Enabled         bool    `toml:"enabled"`
+		Vsync           bool    `toml:"vsync"`
+		Animations      bool    `toml:"animations"`
+		Shadow          bool    `toml:"shadow"`
+		ShadowRadius    int     `toml:"shadow_radius"`
+		ShadowOpacity   float64 `toml:"shadow_opacity"`
+		Blur            bool    `toml:"blur"`
+		BlurStrength    int     `toml:"blur_strength"`
+		Fading          bool    `toml:"fading"`
+		CornerRadius    int     `toml:"corner_radius"`
+		BarOpacity      float64 `toml:"bar_opacity"`
+		WindowOpacity   float64 `toml:"window_opacity"`
+		InactiveOpacity float64 `toml:"inactive_opacity"`
+		TerminalOpacity float64 `toml:"terminal_opacity"`
+		MenuOpacity     float64 `toml:"menu_opacity"`
 	} `toml:"compositor"`
 
 	Session struct {
@@ -95,21 +99,38 @@ func RiceDir() string {
 	return filepath.Join(home, "dotfiles", "vxwm", "rice")
 }
 
-// LoadRice читает живой конфиг. Если его ещё нет, берём умолчания из
-// репозитория -- там же, где лежит apply.py.
-func LoadRice() (Rice, error) {
+// DefaultRice -- умолчания из репозитория, прочитанные из rice.toml рядом с
+// apply.py. Нужны как основа: живой файл писали руками и часть ключей в нём
+// может отсутствовать, а нули («прозрачность бара 0», «простой 0 секунд»)
+// приложение показало бы как настоящие значения и первой же правкой записало
+// бы их в файл.
+func DefaultRice() (Rice, error) {
 	var r Rice
-	data, err := os.ReadFile(RicePath())
+	data, err := os.ReadFile(filepath.Join(RiceDir(), "rice.toml"))
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return r, err
-		}
-		data, err = os.ReadFile(filepath.Join(RiceDir(), "rice.toml"))
-		if err != nil {
-			return r, fmt.Errorf("нет ни живого rice.toml, ни умолчаний: %w", err)
-		}
+		return r, err
 	}
 	return r, toml.Unmarshal(data, &r)
+}
+
+// LoadRice накатывает живой конфиг поверх умолчаний. Если живого ещё нет,
+// остаются умолчания.
+func LoadRice() (Rice, error) {
+	r, defErr := DefaultRice()
+	data, err := os.ReadFile(RicePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			if defErr != nil {
+				return r, fmt.Errorf("нет ни живого rice.toml, ни умолчаний: %w", defErr)
+			}
+			return r, nil
+		}
+		return r, err
+	}
+	if err := toml.Unmarshal(data, &r); err != nil {
+		return r, fmt.Errorf("разбор %s: %w", RicePath(), err)
+	}
+	return r, nil
 }
 
 // Palettes -- список доступных тем, по именам файлов палитр. Каталог тем для
@@ -140,11 +161,22 @@ func LoadPalette(name string) (Palette, error) {
 
 // HasWallpaper говорит, есть ли у темы обои. Без них apply.py оставит
 // прежние, и на странице темы это стоит показать заранее.
+//
+// Порядок поиска тот же, что у apply_wallpaper() в apply.py: сперва собранная
+// тема в ~/.config, потом репозиторий, где картинки лежат рядом с палитрами и
+// версионируются. Разойдись он -- приложение показывало бы «обоев нет» там,
+// где генератор их прекрасно находит.
 func HasWallpaper(name string) (string, bool) {
-	for _, ext := range []string{".png", ".jpg", ".jpeg"} {
-		path := filepath.Join(riceHome(), "themes", name, "wallpaper"+ext)
-		if _, err := os.Stat(path); err == nil {
-			return path, true
+	dirs := []string{
+		filepath.Join(riceHome(), "themes", name),
+		filepath.Join(RiceDir(), "themes", name),
+	}
+	for _, dir := range dirs {
+		for _, ext := range []string{".png", ".jpg", ".jpeg"} {
+			path := filepath.Join(dir, "wallpaper"+ext)
+			if _, err := os.Stat(path); err == nil {
+				return path, true
+			}
 		}
 	}
 	return "", false
@@ -161,17 +193,21 @@ func SaveRice(r Rice) error {
 		"theme":   {"name": quote(r.Theme.Name)},
 		"windows": {"gap": itoa(r.Windows.Gap), "border": itoa(r.Windows.Border)},
 		"compositor": {
-			"enabled":        btoa(r.Compositor.Enabled),
-			"vsync":          btoa(r.Compositor.Vsync),
-			"animations":     btoa(r.Compositor.Animations),
-			"shadow":         btoa(r.Compositor.Shadow),
-			"shadow_radius":  itoa(r.Compositor.ShadowRadius),
-			"shadow_opacity": ftoa(r.Compositor.ShadowOpacity),
-			"blur":           btoa(r.Compositor.Blur),
-			"blur_strength":  itoa(r.Compositor.BlurStrength),
-			"fading":         btoa(r.Compositor.Fading),
-			"corner_radius":  itoa(r.Compositor.CornerRadius),
-			"bar_opacity":    ftoa(r.Compositor.BarOpacity),
+			"enabled":          btoa(r.Compositor.Enabled),
+			"vsync":            btoa(r.Compositor.Vsync),
+			"animations":       btoa(r.Compositor.Animations),
+			"shadow":           btoa(r.Compositor.Shadow),
+			"shadow_radius":    itoa(r.Compositor.ShadowRadius),
+			"shadow_opacity":   ftoa(r.Compositor.ShadowOpacity),
+			"blur":             btoa(r.Compositor.Blur),
+			"blur_strength":    itoa(r.Compositor.BlurStrength),
+			"fading":           btoa(r.Compositor.Fading),
+			"corner_radius":    itoa(r.Compositor.CornerRadius),
+			"bar_opacity":      ftoa(r.Compositor.BarOpacity),
+			"window_opacity":   ftoa(r.Compositor.WindowOpacity),
+			"inactive_opacity": ftoa(r.Compositor.InactiveOpacity),
+			"terminal_opacity": ftoa(r.Compositor.TerminalOpacity),
+			"menu_opacity":     ftoa(r.Compositor.MenuOpacity),
 		},
 		"session": {
 			"restore":           btoa(r.Session.Restore),
@@ -319,8 +355,13 @@ func ApplyRice(themeOnly bool) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Последняя строка вывода информативнее кода возврата: там причина.
+		// Молчаливый провал (нет apply.py, нет прав) вывода не даёт вовсе --
+		// тогда показываем саму ошибку запуска, а не пустой тост.
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		return fmt.Errorf("%s", lines[len(lines)-1])
+		if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+			return fmt.Errorf("%s", last)
+		}
+		return fmt.Errorf("%s: %w", filepath.Join(RiceDir(), "apply.py"), err)
 	}
 	return nil
 }

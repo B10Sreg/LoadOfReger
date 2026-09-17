@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -89,5 +90,104 @@ func TestSaveRiceAddsMissingKey(t *testing.T) {
 	// появиться целиком, иначе правка молча пропадает.
 	if again.Windows.Gap != 7 {
 		t.Errorf("отсутствующая секция потеряна: gap = %d, ждали 7", again.Windows.Gap)
+	}
+}
+
+// Живой rice.toml мог остаться от руки и без половины ключей. Отсутствующее
+// берётся из умолчаний, а не превращается в нули: иначе приложение показало
+// бы «прозрачность бара 0» и первой же правкой записало это в файл.
+func TestLoadRiceFillsMissingKeysFromDefaults(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("VXWM_RICE_DIR", "../vxwm/rice")
+
+	if err := os.MkdirAll(dir+"/vxwm-rice", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	live := "[theme]\nname = \"paper\"\n\n[windows]\ngap = 4\n"
+	if err := os.WriteFile(RicePath(), []byte(live), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	def, err := DefaultRice()
+	if err != nil {
+		t.Fatalf("DefaultRice: %v", err)
+	}
+	r, err := LoadRice()
+	if err != nil {
+		t.Fatalf("LoadRice: %v", err)
+	}
+
+	if r.Theme.Name != "paper" || r.Windows.Gap != 4 {
+		t.Errorf("живые значения потерялись: %+v", r)
+	}
+	if r.Windows.Border != def.Windows.Border {
+		t.Errorf("border=%d, ждали умолчание %d", r.Windows.Border, def.Windows.Border)
+	}
+	if r.Compositor.BarOpacity != def.Compositor.BarOpacity {
+		t.Errorf("bar_opacity=%v, ждали умолчание %v",
+			r.Compositor.BarOpacity, def.Compositor.BarOpacity)
+	}
+	if r.Power.IdleSeconds != def.Power.IdleSeconds {
+		t.Errorf("idle_seconds=%d, ждали умолчание %d",
+			r.Power.IdleSeconds, def.Power.IdleSeconds)
+	}
+}
+
+// Обои ищутся и в репозитории, а не только в собранной теме: apply.py умеет
+// брать их оттуда, и приложение не должно говорить «нет файла» о картинке,
+// которую генератор находит.
+func TestHasWallpaperFindsRepoFile(t *testing.T) {
+	live := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", live)
+	t.Setenv("VXWM_RICE_DIR", repo)
+
+	if _, ok := HasWallpaper("carbon"); ok {
+		t.Fatal("обои нашлись там, где их нет")
+	}
+
+	dir := filepath.Join(repo, "themes", "carbon")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "wallpaper.png")
+	if err := os.WriteFile(want, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := HasWallpaper("carbon")
+	if !ok {
+		t.Fatal("обои в репозитории не найдены")
+	}
+	if got != want {
+		t.Errorf("путь разошёлся: %s, ждали %s", got, want)
+	}
+}
+
+// Собранная тема важнее репозитория: если картинку положили в ~/.config,
+// apply.py возьмёт именно её.
+func TestHasWallpaperPrefersLiveTheme(t *testing.T) {
+	live := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", live)
+	t.Setenv("VXWM_RICE_DIR", repo)
+
+	for _, dir := range []string{
+		filepath.Join(repo, "themes", "carbon"),
+		filepath.Join(live, "vxwm-rice", "themes", "carbon"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "wallpaper.png"), []byte("png"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, _ := HasWallpaper("carbon")
+	want := filepath.Join(live, "vxwm-rice", "themes", "carbon", "wallpaper.png")
+	if got != want {
+		t.Errorf("взят %s, а живая тема должна быть важнее: %s", got, want)
 	}
 }

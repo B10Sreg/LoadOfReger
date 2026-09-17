@@ -21,6 +21,29 @@ const cssPriority = 900
 
 type styler struct {
 	provider *gtk.CSSProvider
+	// Последняя применённая палитра. CSS зависит только от неё, а apply
+	// зовётся на каждую правку -- в том числе на каждый шаг ползунка высоты,
+	// к цветам отношения не имеющего. Разбор таблицы стилей и перерисовка
+	// всего окна ради неизменившейся строки -- самая дорогая мелочь в
+	// настройках.
+	last  visuals
+	valid bool
+}
+
+// visuals -- те поля конфига, от которых зависит внешний вид окна.
+type visuals struct {
+	bg, fg, accent, card string
+	radius               int
+}
+
+func visualsOf(cfg Config) visuals {
+	return visuals{
+		bg:     opaque(cfg.Style.Background),
+		fg:     opaque(cfg.Style.Foreground),
+		accent: opaque(cfg.Style.Accent),
+		card:   opaque(cfg.Tags.ActiveBG),
+		radius: radiusPx(cfg.Style.Radius),
+	}
 }
 
 func newStyler() *styler {
@@ -37,19 +60,19 @@ func newStyler() *styler {
 }
 
 func (s *styler) apply(cfg Config) {
-	s.provider.LoadFromString(css(cfg))
+	v := visualsOf(cfg)
+	if s.valid && v == s.last {
+		return
+	}
+	s.last, s.valid = v, true
+	s.provider.LoadFromString(css(v))
 }
 
 // Палитра риса графитовая и почти монохромная, поэтому именованные цвета
 // libadwaita переопределяются напрямую значениями из конфига. Альфу режем:
 // бар живёт на ARGB-визуале и может быть полупрозрачным, а полупрозрачный фон
 // окна настроек означал бы дыру в окне.
-func css(cfg Config) string {
-	bg := opaque(cfg.Style.Background)
-	fg := opaque(cfg.Style.Foreground)
-	accent := opaque(cfg.Style.Accent)
-	card := opaque(cfg.Tags.ActiveBG)
-
+func css(v visuals) string {
 	// Цвета задаются прямыми селекторами, а не через палитру libadwaita:
 	// @define-color в GTK4 виден только правилам того же провайдера, а
 	// переопределить --accent-bg-color и соседей не выходит ни на каком
@@ -135,7 +158,7 @@ row spinbutton button {
 	border: none;
 	box-shadow: none;
 }
-`, bg, fg, accent, card, radiusPx(cfg.Style.Radius))
+`, v.bg, v.fg, v.accent, v.card, v.radius)
 }
 
 // opaque приводит цвет конфига к форме #rrggbb, понятной CSS, и отбрасывает

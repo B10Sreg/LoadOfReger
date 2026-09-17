@@ -23,6 +23,9 @@ pub struct Atoms {
     pub wm_state: xlib::Atom,
     pub wm_state_above: xlib::Atom,
     pub wm_state_sticky: xlib::Atom,
+    /// Ориентация бара для vxwm: 1 -- вертикальный. Из неё WM выбирает ось,
+    /// вдоль которой уезжают окна при смене тега.
+    pub vxbar_vertical: xlib::Atom,
 }
 
 impl Atoms {
@@ -47,6 +50,7 @@ impl Atoms {
             wm_state: intern("_NET_WM_STATE"),
             wm_state_above: intern("_NET_WM_STATE_ABOVE"),
             wm_state_sticky: intern("_NET_WM_STATE_STICKY"),
+            vxbar_vertical: intern("_VXBAR_VERTICAL"),
         }
     }
 }
@@ -211,7 +215,25 @@ impl X {
         };
         xlib::XSetClassHint(d, self.win, &mut class);
 
+        self.set_orientation(cfg);
         self.set_struts(cfg);
+    }
+
+    /// Публикуем ориентацию бара: vxwm читает её с окна дока и по ней выбирает
+    /// направление анимации переключения тегов. Свойство, а не общий конфиг,
+    /// чтобы настройка жила в одном месте -- здесь.
+    pub unsafe fn set_orientation(&self, cfg: &Config) {
+        let vert: c_long = cfg.bar.position.vertical() as c_long;
+        xlib::XChangeProperty(
+            self.dpy,
+            self.win,
+            self.atoms.vxbar_vertical,
+            xlib::XA_CARDINAL,
+            32,
+            xlib::PropModeReplace,
+            &vert as *const c_long as *const c_uchar,
+            1,
+        );
     }
 
     /// Струт резервирует полосу от края ЭКРАНА, а не монитора, поэтому при
@@ -288,6 +310,7 @@ impl X {
                 self.geom.w,
                 self.geom.h,
             );
+            self.set_orientation(cfg);
             self.set_struts(cfg);
             xlib::XFlush(self.dpy);
         }

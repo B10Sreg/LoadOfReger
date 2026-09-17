@@ -19,6 +19,8 @@ pub enum Kind {
     Volume,
     Cpu,
     Ram,
+    Disk,
+    Power,
 }
 
 impl Kind {
@@ -28,6 +30,8 @@ impl Kind {
             Hit::Volume => Some(Kind::Volume),
             Hit::Cpu => Some(Kind::Cpu),
             Hit::Ram => Some(Kind::Ram),
+            Hit::Disk => Some(Kind::Disk),
+            Hit::Power => Some(Kind::Power),
             _ => None,
         }
     }
@@ -41,12 +45,31 @@ pub struct PopupData {
     pub mem_used: f64,
     pub mem_total: f64,
     pub procs: Vec<modules::Proc>,
+    /// Заполняется только для виджета диска: обход /proc/mounts со statvfs на
+    /// каждый раздел незачем делать ради виджета громкости.
+    pub mounts: Vec<modules::Mount>,
+}
+
+/// Чем кончился клик по виджету. Команду виджет не запускает сам: решение
+/// «выключить машину» должно проходить через основной цикл, который заодно
+/// закроет виджет и перерисует бар.
+pub enum Click {
+    Ignored,
+    /// Что-то поменялось, бар стоит перерисовать.
+    Changed,
+    Run(String),
 }
 
 /// Строка содержимого. Слайдер -- единственный виджет со своей геометрией,
 /// остальное это пары «слева подпись, справа значение».
 enum Item {
     Title(String),
+    /// Строка-кнопка: клик по ней запускает команду и закрывает виджет.
+    Action {
+        icon: &'static str,
+        label: String,
+        cmd: String,
+    },
     /// Подсказка мелким приглушённым шрифтом внизу виджета.
     Hint(String),
     Pair(String, String),
@@ -56,6 +79,9 @@ enum Item {
 }
 
 const ROW_H: f64 = 22.0;
+/// Строка-кнопка выше обычной: в неё вписана подложка, и текст вплотную к её
+/// кромке читался бы как опечатка вёрстки.
+const ACTION_H: f64 = 30.0;
 const SLIDER_H: f64 = 26.0;
 const CAL_ROW_H: f64 = 22.0;
 const CAL_ROWS: f64 = 7.0; // строка с днями недели + шесть недель
@@ -73,6 +99,9 @@ pub struct Popup {
     h: f64,
     /// Зона слайдера громкости в координатах окна -- по ней считается клик.
     slider: Option<(f64, f64, f64)>,
+    /// Строки-кнопки: (верх, низ, команда). Заполняются при отрисовке, потому
+    /// что положение строки известно только там.
+    actions: Vec<(f64, f64, String)>,
 }
 
 impl Popup {
@@ -144,6 +173,7 @@ impl Popup {
                 w: 1.0,
                 h: 1.0,
                 slider: None,
+                actions: Vec::new(),
             })
         }
     }
@@ -197,6 +227,7 @@ impl Popup {
         }
         self.kind = None;
         self.slider = None;
+        self.actions.clear();
         unsafe {
             xlib::XUngrabPointer(self.dpy, xlib::CurrentTime);
             xlib::XUnmapWindow(self.dpy, self.win);
@@ -214,17 +245,21 @@ impl Popup {
         self.draw(cfg, &items);
     }
 
-    /// Клик внутри виджета. Возвращает true, если что-то поменялось и бар
-    /// стоит перерисовать.
-    pub fn click(&mut self, wx: f64, wy: f64) -> bool {
+    /// Клик внутри виджета.
+    pub fn click(&mut self, wx: f64, wy: f64) -> Click {
         if let (Some(Kind::Volume), Some((sx, sy, sw))) = (self.kind, self.slider) {
             if wy >= sy && wy <= sy + SLIDER_H {
                 let frac = ((wx - sx) / sw).clamp(0.0, 1.0);
                 modules::set_volume_abs((frac * 100.0).round() as u32);
-                return true;
+                return Click::Changed;
             }
         }
-        false
+        for (top, bottom, cmd) in &self.actions {
+            if wy >= *top && wy <= *bottom {
+                return Click::Run(cmd.clone());
+            }
+        }
+        Click::Ignored
     }
 
     /// Левый верхний угол виджета: вплотную к кромке бара, выровнен по модулю
@@ -320,6 +355,7 @@ impl Popup {
             .iter()
             .map(|it| match it {
                 Item::Title(_) | Item::Pair(_, _) => ROW_H,
+                Item::Action { .. } => ACTION_H,
                 Item::Hint(t) => hint_h(&self.hint_layout(cfg, t)),
                 Item::Slider(_) => SLIDER_H,
                 Item::Calendar => CAL_ROW_H * CAL_ROWS,
@@ -331,6 +367,7 @@ impl Popup {
 
     fn draw(&mut self, cfg: &Config, items: &[Item]) {
         self.slider = None;
+        self.actions.clear();
         let pad = cfg.popups.padding;
         let c = &self.ctx;
         c.set_operator(cairo::Operator::Source);
@@ -365,6 +402,17 @@ impl Popup {
                     self.text(l, pad, y, &cfg.style.foreground, 1.0);
                     self.text_right(r, self.w - pad, y, &cfg.style.muted);
                     y += ROW_H;
+                }
+                Item::Action { icon, label, cmd } => {
+                    let w = self.w - 2.0 * pad;
+                    self.set_color(&cfg.tags.active_bg);
+                    self.rounded(pad, y, w, ACTION_H - 4.0, cfg.popups.radius.min(8.0));
+                    self.ctx.fill().ok();
+                    let ty = y + (ACTION_H - 4.0 - ROW_H) / 2.0;
+                    let iw = self.text(icon, pad + 10.0, ty, &cfg.style.accent, 1.0);
+                    self.text(label, pad + 10.0 + iw + 8.0, ty, &cfg.style.foreground, 1.0);
+                    self.actions.push((y, y + ACTION_H - 4.0, cmd.clone()));
+                    y += ACTION_H;
                 }
                 Item::Gap(g) => y += g,
                 Item::Slider(frac) => {
@@ -470,6 +518,52 @@ fn build(cfg: &Config, kind: Kind, d: &PopupData) -> Vec<Item> {
             ];
             v.push(Item::Hint(
                 "Клик по полосе — уровень, колесо на баре — ±5%".into(),
+            ));
+            v
+        }
+        Kind::Disk => {
+            let mut v = vec![Item::Title("Диски".into()), Item::Gap(6.0)];
+            if d.mounts.is_empty() {
+                v.push(Item::Pair("Нет разделов".into(), String::new()));
+            }
+            for m in &d.mounts {
+                let used = m.total_gb - m.free_gb;
+                // Разделы вроде /boot/efi меньше гигабайта, и в целых ГБ они
+                // оба числа показывали бы нулями.
+                let value = if m.total_gb < 1.0 {
+                    format!("{:.0} из {:.0} МБ", used * 1024.0, m.total_gb * 1024.0)
+                } else {
+                    format!("{:.0} из {:.0} ГБ", used, m.total_gb)
+                };
+                v.push(Item::Pair(trim_name(&m.point), value));
+            }
+            v.push(Item::Hint("Справа -- занято от общего объёма".into()));
+            v
+        }
+        Kind::Power => {
+            let p = &cfg.power;
+            let mut v = vec![Item::Title("Питание".into()), Item::Gap(6.0)];
+            // Гибернация первой: ради неё модуль и заводился. Дальше по
+            // возрастанию потерь -- сон, замок, и только потом то, после чего
+            // сессии не станет.
+            for (icon, label, cmd) in [
+                ("\u{f0904}", "Гибернация", &p.hibernate),
+                ("\u{f04b2}", "Сон", &p.suspend),
+                ("\u{f033e}", "Заблокировать", &p.lock),
+                ("\u{f0709}", "Перезагрузка", &p.reboot),
+                ("\u{f0425}", "Выключить", &p.poweroff),
+            ] {
+                if cmd.trim().is_empty() {
+                    continue;
+                }
+                v.push(Item::Action {
+                    icon,
+                    label: label.into(),
+                    cmd: cmd.clone(),
+                });
+            }
+            v.push(Item::Hint(
+                "Гибернация сохраняет сессию целиком и возвращает её после включения".into(),
             ));
             v
         }
@@ -598,6 +692,15 @@ pub fn procs_for(kind: Kind, cfg: &Config, sampler: &mut ProcSampler) -> Vec<mod
     match kind {
         Kind::Cpu => sampler.top_cpu(cfg.popups.proc_rows),
         Kind::Ram => sampler.top_mem(cfg.popups.proc_rows),
+        _ => Vec::new(),
+    }
+}
+
+/// То же для разделов: /proc/mounts со statvfs на каждую строку нужен только
+/// открытому виджету диска.
+pub fn mounts_for(kind: Kind) -> Vec<modules::Mount> {
+    match kind {
+        Kind::Disk => modules::mounts(),
         _ => Vec::new(),
     }
 }

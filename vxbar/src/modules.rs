@@ -96,6 +96,17 @@ impl Volume {
             format!("{} {}%", self.icon(), self.percent)
         }
     }
+
+    /// То же самое для вертикального бара: строками, без знака процента --
+    /// в колонку шириной с иконку он всё равно не влезает, а «42» под
+    /// значком громкости читается однозначно.
+    pub fn lines(&self) -> Vec<String> {
+        if self.muted {
+            vec![self.icon().to_string()]
+        } else {
+            vec![self.icon().to_string(), self.percent.to_string()]
+        }
+    }
 }
 
 /// wpctl -- внешний процесс, поэтому результат кэшируется: дёргать его на
@@ -417,6 +428,20 @@ impl Temps {
             (None, None) => String::new(),
         }
     }
+
+    /// Вертикальный вариант: каждый датчик -- значок и градусы под ним.
+    pub fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(c) = self.cpu {
+            out.push(ICON_TEMP.to_string());
+            out.push(format!("{c}\u{00b0}"));
+        }
+        if let Some(g) = self.gpu {
+            out.push(ICON_GPU.to_string());
+            out.push(format!("{g}\u{00b0}"));
+        }
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +581,21 @@ impl Net {
             human_bps(self.tx_bps)
         )
     }
+
+    /// Вертикальный вариант: значок интерфейса, под ним приём и отдача
+    /// отдельными строками. Надпись «нет сети» в колонку не лезет, поэтому
+    /// у опущенного интерфейса остаётся только перечёркнутый значок.
+    pub fn lines(&self) -> Vec<String> {
+        if !self.up {
+            return vec![ICON_WIFI_OFF.to_string()];
+        }
+        let icon = if self.wireless { ICON_WIFI } else { ICON_ETH };
+        vec![
+            icon.to_string(),
+            format!("{ICON_DOWN}{}", human_bps(self.rx_bps)),
+            format!("{ICON_UP}{}", human_bps(self.tx_bps)),
+        ]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -667,4 +707,315 @@ pub fn music_next() {
 
 pub fn music_prev() {
     let _ = Command::new("playerctl").arg("previous").status();
+}
+
+// ---------------------------------------------------------------------------
+// Диск
+// ---------------------------------------------------------------------------
+
+pub const ICON_DISK: &str = "\u{f02ca}";
+
+pub struct Disk {
+    pub free_gb: f64,
+    pub total_gb: f64,
+}
+
+impl Disk {
+    pub fn label(&self) -> String {
+        format!("{ICON_DISK} {:.0}G", self.free_gb)
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        vec![ICON_DISK.to_string(), format!("{:.0}", self.free_gb)]
+    }
+}
+
+/// Свободное место на разделе, которому принадлежит путь. statvfs, а не разбор
+/// df: лишний процесс на каждый тик ради двух чисел не нужен.
+pub fn disk(path: &str) -> Option<Disk> {
+    let c = std::ffi::CString::new(path).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    // f_bavail -- блоки, доступные обычному пользователю: у ext4 часть места
+    // зарезервирована под root, и по f_bfree диск выглядел бы свободнее, чем он
+    // есть для всего, что не работает от root.
+    let to_gb = |blocks: u64| blocks as f64 * st.f_frsize as f64 / 1024.0 / 1024.0 / 1024.0;
+    Some(Disk {
+        free_gb: to_gb(st.f_bavail as u64),
+        total_gb: to_gb(st.f_blocks as u64),
+    })
+}
+
+/// Смонтированная файловая система для выдвижного виджета.
+pub struct Mount {
+    pub point: String,
+    pub free_gb: f64,
+    pub total_gb: f64,
+}
+
+/// Реальные разделы из /proc/mounts: псевдо-ФС (tmpfs, proc, sys, cgroup)
+/// отброшены -- места на них нет в том смысле, в каком его смотрят в баре.
+pub fn mounts() -> Vec<Mount> {
+    let text = match std::fs::read_to_string("/proc/mounts") {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut f = line.split_whitespace();
+        let (dev, point) = match (f.next(), f.next()) {
+            (Some(d), Some(p)) => (d, p),
+            _ => continue,
+        };
+        if !dev.starts_with("/dev/") {
+            continue;
+        }
+        // Один и тот же раздел бывает смонтирован дважды (bind, снапшоты):
+        // в списке он нужен один раз.
+        if !seen.insert(dev.to_string()) {
+            continue;
+        }
+        // Пробелы в точке монтирования /proc/mounts экранирует восьмеричным \040.
+        let point = point.replace("\\040", " ");
+        if let Some(d) = disk(&point) {
+            out.push(Mount {
+                point,
+                free_gb: d.free_gb,
+                total_gb: d.total_gb,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.total_gb.total_cmp(&a.total_gb));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Аптайм
+// ---------------------------------------------------------------------------
+
+pub const ICON_UPTIME: &str = "\u{f051b}";
+
+/// Сколько машина на ногах. Секунды не показываем: модуль обновляется раз в
+/// секунду, и бегущие цифры в баре только дёргают глаз.
+pub fn uptime_parts() -> (u64, u64) {
+    let secs = std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|t| t.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0) as u64;
+    (secs / 3600, (secs % 3600) / 60)
+}
+
+pub fn uptime_label() -> String {
+    let (h, m) = uptime_parts();
+    if h >= 24 {
+        format!("{ICON_UPTIME} {}д {}ч", h / 24, h % 24)
+    } else if h > 0 {
+        format!("{ICON_UPTIME} {h}ч {m}м")
+    } else {
+        format!("{ICON_UPTIME} {m}м")
+    }
+}
+
+pub fn uptime_lines() -> Vec<String> {
+    let (h, m) = uptime_parts();
+    let value = if h >= 24 {
+        format!("{}д", h / 24)
+    } else if h > 0 {
+        format!("{h}ч")
+    } else {
+        format!("{m}м")
+    };
+    vec![ICON_UPTIME.to_string(), value]
+}
+
+// ---------------------------------------------------------------------------
+// Батарея
+// ---------------------------------------------------------------------------
+
+pub const ICON_BAT_CHARGING: &str = "\u{f0084}";
+/// Значки заряда идут подряд от пустой к полной: nf-md-battery_10 .. _90,
+/// а полная -- отдельным кодом.
+const ICON_BAT_FULL: &str = "\u{f0079}";
+const ICON_BAT_ALERT: &str = "\u{f0083}";
+
+pub struct Battery {
+    pub percent: u32,
+    pub charging: bool,
+}
+
+impl Battery {
+    pub fn icon(&self) -> String {
+        if self.charging {
+            return ICON_BAT_CHARGING.to_string();
+        }
+        if self.percent >= 95 {
+            return ICON_BAT_FULL.to_string();
+        }
+        if self.percent < 10 {
+            return ICON_BAT_ALERT.to_string();
+        }
+        // battery_10 = U+F007A, дальше по одному на каждые 10%.
+        let step = (self.percent / 10).clamp(1, 9) as u32;
+        char::from_u32(0xf0079 + step)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| ICON_BAT_FULL.to_string())
+    }
+
+    pub fn label(&self) -> String {
+        format!("{} {}%", self.icon(), self.percent)
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        vec![self.icon(), self.percent.to_string()]
+    }
+}
+
+/// Заряд первой попавшейся батареи. Нет батареи -- нет модуля: на десктопе он
+/// показывал бы прочерк, а на ноутбуке появится сам.
+pub fn battery() -> Option<Battery> {
+    let dirs = std::fs::read_dir("/sys/class/power_supply").ok()?;
+    for e in dirs.flatten() {
+        let dir = e.path();
+        let kind = std::fs::read_to_string(dir.join("type")).unwrap_or_default();
+        if kind.trim() != "Battery" {
+            continue;
+        }
+        let percent: u32 = match std::fs::read_to_string(dir.join("capacity")) {
+            Ok(t) => match t.trim().parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            },
+            Err(_) => continue,
+        };
+        let status = std::fs::read_to_string(dir.join("status")).unwrap_or_default();
+        return Some(Battery {
+            percent: percent.min(100),
+            charging: matches!(status.trim(), "Charging" | "Full"),
+        });
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Микрофон
+// ---------------------------------------------------------------------------
+
+pub const ICON_MIC: &str = "\u{f036c}";
+pub const ICON_MIC_OFF: &str = "\u{f036d}";
+
+#[derive(Clone, Copy)]
+pub struct Mic {
+    pub percent: u32,
+    pub muted: bool,
+}
+
+impl Mic {
+    pub fn icon(&self) -> &'static str {
+        if self.muted {
+            ICON_MIC_OFF
+        } else {
+            ICON_MIC
+        }
+    }
+
+    pub fn label(&self) -> String {
+        if self.muted {
+            format!("{} off", self.icon())
+        } else {
+            format!("{} {}%", self.icon(), self.percent)
+        }
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        if self.muted {
+            vec![self.icon().to_string()]
+        } else {
+            vec![self.icon().to_string(), self.percent.to_string()]
+        }
+    }
+}
+
+/// Тот же кеш, что у громкости, и по той же причине: wpctl -- отдельный процесс.
+pub struct MicCache {
+    value: Mic,
+    fetched: Option<Instant>,
+    ttl: Duration,
+}
+
+impl MicCache {
+    pub fn new() -> Self {
+        Self {
+            value: Mic {
+                percent: 0,
+                muted: false,
+            },
+            fetched: None,
+            ttl: Duration::from_millis(500),
+        }
+    }
+
+    pub fn get(&mut self) -> Mic {
+        let stale = match self.fetched {
+            Some(t) => t.elapsed() > self.ttl,
+            None => true,
+        };
+        if stale {
+            self.value = read_mic().unwrap_or(self.value);
+            self.fetched = Some(Instant::now());
+        }
+        self.value
+    }
+
+    pub fn invalidate(&mut self) {
+        self.fetched = None;
+    }
+}
+
+fn read_mic() -> Option<Mic> {
+    let out = Command::new("wpctl")
+        .args(["get-volume", "@DEFAULT_AUDIO_SOURCE@"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let v: f32 = s.split_whitespace().nth(1)?.parse().ok()?;
+    Some(Mic {
+        percent: (v * 100.0).round() as u32,
+        muted: s.contains("MUTED"),
+    })
+}
+
+pub fn toggle_mic_mute() {
+    let _ = Command::new("wpctl")
+        .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+        .status();
+}
+
+pub fn set_mic_step(delta: i32) {
+    let arg = if delta >= 0 {
+        format!("{}%+", delta)
+    } else {
+        format!("{}%-", -delta)
+    };
+    let _ = Command::new("wpctl")
+        .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", &arg])
+        .status();
+}
+
+// ---------------------------------------------------------------------------
+// Питание
+// ---------------------------------------------------------------------------
+
+pub const ICON_POWER: &str = "\u{f0425}";
+
+/// Запустить команду из конфига и забыть про неё: дети хоронятся ядром
+/// (SIGCHLD игнорируется в main), ждать нам нечего.
+pub fn spawn_shell(cmd: &str) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return;
+    }
+    let _ = Command::new("sh").arg("-c").arg(cmd).spawn();
 }

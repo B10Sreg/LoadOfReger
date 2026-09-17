@@ -71,6 +71,8 @@ fn main() {
 
     let mut rt = Runtime {
         cpu: modules::CpuMeter::default(),
+        mic: modules::MicCache::new(),
+        disk: DiskCache::default(),
         temps: modules::TempSensors::discover(),
         net: modules::NetMeter::new(),
         music: modules::MusicCache::new(),
@@ -85,6 +87,11 @@ fn main() {
     let xfd = unsafe { xlib::XConnectionNumber(xh.dpy) };
     let mut last_tick = Instant::now() - Duration::from_secs(60);
     let mut dirty = true;
+    // Последнее собранное состояние: кадры анимации рисуются по нему.
+    // Пересобирать его на каждый кадр нельзя -- collect() обходит все окна
+    // отдельными запросами к X, а раз в полсекунды ещё и форкает wpctl. На
+    // переезде плашки это стоило пары кадров ровно там, где она быстрее всего.
+    let mut state: Option<BarState> = None;
 
     loop {
         if quit.load(Ordering::Relaxed) {
@@ -123,22 +130,36 @@ fn main() {
             dirty = true;
         }
 
-        if dirty && !hidden {
-            let st = collect(&xh, &cfg, &mut rt);
-            rend.draw(&cfg, &st, xh.geom.w as f64, xh.geom.h as f64);
+        // Кадр нужен либо когда данные протухли, либо пока едет плашка тега.
+        let frame = !hidden && (dirty || rend.animating());
+        if frame {
+            if dirty || state.is_none() {
+                state = Some(collect(&xh, &cfg, &mut rt));
+            }
+            let st = state.as_ref().expect("состояние собрано выше");
+            rend.draw(&cfg, st, xh.geom.w as f64, xh.geom.h as f64);
             unsafe { xlib::XFlush(xh.dpy) };
-            if let Some(kind) = rt.pop.kind {
-                let data = popup_data(&cfg, kind, &st, &mut rt.procs);
-                rt.pop.refresh(&cfg, &data);
+            // Виджету свежие данные нужны только на тике: тегов он не
+            // показывает, и перерисовывать его между кадрами анимации незачем.
+            if dirty {
+                if let Some(kind) = rt.pop.kind {
+                    let data = popup_data(&cfg, kind, st, &mut rt.procs);
+                    rt.pop.refresh(&cfg, &data);
+                }
             }
             dirty = false;
         }
 
         // Ждём либо X-событие, либо истечения интервала. Без этого пришлось бы
         // крутить busy-loop или спать фиксированно, теряя отзывчивость кликов.
-        let wait = interval
+        let mut wait = interval
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::from_millis(0));
+        // Пока плашка тега едет, кадры нужны чаще опроса модулей: интервал там
+        // секунда, и анимация из одного кадра не состоит.
+        if rend.animating() && !hidden {
+            wait = wait.min(FRAME);
+        }
         let pending = unsafe { xlib::XPending(xh.dpy) };
         if pending == 0 && !wait.is_zero() {
             wait_fd(xfd, wait);
@@ -161,6 +182,11 @@ fn main() {
     }
 }
 
+/// Шаг анимации: ~60 кадров в секунду. Дольше держать плашку между тегами
+/// незачем, а чаще -- бессмысленно даже на 144 Гц: сама анимация занимает
+/// десятые доли секунды.
+const FRAME: Duration = Duration::from_millis(16);
+
 /// poll(2) на дескрипторе X-соединения с таймаутом.
 fn wait_fd(fd: c_int, dur: Duration) {
     let mut pfd = libc::pollfd {
@@ -179,6 +205,8 @@ fn wait_fd(fd: c_int, dur: Duration) {
 struct Runtime {
     cpu: modules::CpuMeter,
     vol: modules::VolumeCache,
+    mic: modules::MicCache,
+    disk: DiskCache,
     /// Датчики ищутся один раз: нумерация hwmon в пределах сессии не меняется.
     temps: modules::TempSensors,
     net: modules::NetMeter,
@@ -188,6 +216,29 @@ struct Runtime {
     keeper: GeometryKeeper,
     /// Окно, на свойства которого мы сейчас подписаны ради заголовка.
     watched: xlib::Window,
+}
+
+/// Свободное место меряется реже остального: statvfs на сетевой или уснувший
+/// диск умеет задуматься на десятки миллисекунд, а цифра там меняется не
+/// быстрее, чем что-то успевает записаться.
+#[derive(Default)]
+struct DiskCache {
+    value: Option<modules::Disk>,
+    fetched: Option<Instant>,
+}
+
+impl DiskCache {
+    fn get(&mut self, path: &str) -> Option<modules::Disk> {
+        let stale = self.fetched.is_none_or(|t| t.elapsed() > Duration::from_secs(5));
+        if stale {
+            self.value = modules::disk(path);
+            self.fetched = Some(Instant::now());
+        }
+        self.value.as_ref().map(|d| modules::Disk {
+            free_gb: d.free_gb,
+            total_gb: d.total_gb,
+        })
+    }
 }
 
 /// Сколько раз подряд бар возвращает себя на место, прежде чем сдаться.
@@ -297,11 +348,22 @@ fn handle_event(
                     };
                     let (pw, ph) = rt.pop.size();
                     if lx >= 0.0 && ly >= 0.0 && lx < pw && ly < ph {
-                        if rt.pop.click(lx, ly) {
-                            rt.vol.invalidate();
-                            return true;
+                        match rt.pop.click(lx, ly) {
+                            popup::Click::Changed => {
+                                rt.vol.invalidate();
+                                return true;
+                            }
+                            // Кнопку питания закрываем до запуска: команда
+                            // уводит сессию в сон или в перезагрузку, и
+                            // висящий поверх виджет остался бы последним, что
+                            // человек увидит на экране.
+                            popup::Click::Run(cmd) => {
+                                rt.pop.close();
+                                modules::spawn_shell(&cmd);
+                                return true;
+                            }
+                            popup::Click::Ignored => return false,
                         }
-                        return false;
                     }
                     rt.pop.close();
                     return true;
@@ -354,6 +416,22 @@ fn handle_event(
                     (Some(Hit::Music), 5) => {
                         modules::music_prev();
                         rt.music.invalidate();
+                        true
+                    }
+                    // Микрофон живёт теми же жестами, что и громкость.
+                    (Some(Hit::Mic), 1) | (Some(Hit::Mic), 2) | (Some(Hit::Mic), 3) => {
+                        modules::toggle_mic_mute();
+                        rt.mic.invalidate();
+                        true
+                    }
+                    (Some(Hit::Mic), 4) => {
+                        modules::set_mic_step(5);
+                        rt.mic.invalidate();
+                        true
+                    }
+                    (Some(Hit::Mic), 5) => {
+                        modules::set_mic_step(-5);
+                        rt.mic.invalidate();
                         true
                     }
                     (Some(Hit::Clock), 1) => {
@@ -412,6 +490,7 @@ fn popup_data(
         mem_used: st.mem_used,
         mem_total: st.mem_total,
         procs: popup::procs_for(kind, cfg, procs),
+        mounts: popup::mounts_for(kind),
     }
 }
 
@@ -477,5 +556,8 @@ fn collect(xh: &x::X, cfg: &Config, rt: &mut Runtime) -> BarState {
         temps: rt.temps.read(),
         net: rt.net.sample(),
         music: rt.music.get(),
+        disk: rt.disk.get(&cfg.disk.path),
+        battery: modules::battery(),
+        mic: rt.mic.get(),
     }
 }

@@ -14,6 +14,8 @@ pub struct Config {
     pub clock: Clock,
     pub popups: Popups,
     pub music: Music,
+    pub power: Power,
+    pub disk: Disk,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +107,11 @@ pub struct Tags {
     /// Прятать теги, на которых нет окон и которые не активны.
     pub hide_empty: bool,
     pub item_padding: f64,
+    /// Длительность переезда плашки на соседний тег, мс. 0 -- без анимации.
+    /// Переезд через полколонки едет дольше -- см. travel_dur в render.rs.
+    /// Направление задаётся геометрией: у горизонтального бара плашка едет
+    /// влево-вправо, у вертикального -- вверх-вниз.
+    pub anim_ms: u64,
 }
 
 impl Default for Tags {
@@ -117,6 +124,7 @@ impl Default for Tags {
             empty_fg: "#5a5a5e".into(),
             hide_empty: false,
             item_padding: 9.0,
+            anim_ms: 220,
         }
     }
 }
@@ -204,6 +212,48 @@ pub struct Music {
 impl Default for Music {
     fn default() -> Self {
         Self { max_chars: 32 }
+    }
+}
+
+/// Команды кнопки питания. Это модуль `power`: клик открывает виджет со
+/// списком, строка запускает свою команду. Всё -- обычные строки для sh, так
+/// что переопределить их можно чем угодно, хоть своим скриптом.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Power {
+    pub hibernate: String,
+    pub suspend: String,
+    pub lock: String,
+    pub reboot: String,
+    pub poweroff: String,
+}
+
+impl Default for Power {
+    fn default() -> Self {
+        // По умолчанию зовём power.sh из vxwm: он перед уходом снимает слепок
+        // сессии и проверяет, что гибернации есть куда писать. systemctl
+        // hibernate напрямую сделал бы это молча и без сессии.
+        let vxwm = "$HOME/dotfiles/vxwm/power.sh";
+        Self {
+            hibernate: format!("{vxwm} hibernate"),
+            suspend: "systemctl suspend".into(),
+            lock: format!("{vxwm} lock"),
+            reboot: format!("{vxwm} reboot"),
+            poweroff: format!("{vxwm} poweroff"),
+        }
+    }
+}
+
+/// Модуль `disk`: сколько свободно на разделе, которому принадлежит path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Disk {
+    pub path: String,
+}
+
+impl Default for Disk {
+    fn default() -> Self {
+        Self { path: "/".into() }
     }
 }
 

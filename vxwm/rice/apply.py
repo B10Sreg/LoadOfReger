@@ -24,6 +24,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -120,6 +121,52 @@ def load_rice() -> dict:
     return cfg
 
 
+def opacity_subs(cfg) -> dict:
+    """Прозрачность из [compositor] в виде подстановок для шаблонов темы:
+    kitty и rofi красят свой фон сами, а не через picom, поэтому значение надо
+    донести до них. picom проценты хочет целыми, rofi -- тоже."""
+    c = cfg.get("compositor", {})
+    menu = c.get("menu_opacity", 0.85)
+    return {
+        "TERMINAL_OPACITY": c.get("terminal_opacity", 0.75),
+        "MENU_OPACITY_PCT": pct(menu),
+        # Выделенная строка в rofi чуть прозрачнее фона: так она читается как
+        # подсветка, а не как вторая плашка поверх первой.
+        "MENU_ALT_OPACITY_PCT": max(0, pct(menu) - 8),
+    }
+
+
+def pct(value) -> int:
+    return int(round(float(value) * 100))
+
+
+# Сторож композитора: поднимает picom, когда тот падает сам по себе.
+# Имя отдельной константой -- по нему же его и находит pkill.
+KEEPER_NAME = "picom-keeper.sh"
+KEEPER = RICE.parent.parent / "picom" / KEEPER_NAME
+
+SDDM_THEME = Path("/usr/share/sddm/themes/graphite")
+
+
+def apply_sddm(name: str, r: Runner):
+    """Экран входа. Греетер работает под root до всякой сессии и про рис ничего
+    не знает: цвета и обои он берёт из файлов рядом с собой, в /usr/share. Туда
+    нам писать нечем, поэтому под обычным пользователем мы только сверяем и
+    говорим, что тема входа отстала."""
+    src = THEMES / name / "sddm-theme.conf"
+    if not src.exists() or not SDDM_THEME.is_dir():
+        return
+    dest = SDDM_THEME / "theme.conf"
+    if os.access(SDDM_THEME, os.W_OK):
+        r.write(dest, src.read_text())
+        log("экран входа перекрашен")
+        return
+    same = dest.exists() and dest.read_text() == src.read_text()
+    if not same:
+        script = RICE.parent.parent / "sddm" / "install.sh"
+        log(f"экран входа остался прежним, нужен root: sudo bash {script}")
+
+
 def have_display() -> bool:
     return bool(os.environ.get("DISPLAY"))
 
@@ -134,7 +181,7 @@ def apply_theme(cfg, r: Runner):
 
     print(f"тема: {name}")
     if not r.dry:
-        mktheme.build(name, THEMES)
+        mktheme.build(name, THEMES, opacity_subs(cfg))
         log(f"собрана {THEMES / name}")
 
     theme_dir = THEMES / name
@@ -146,6 +193,7 @@ def apply_theme(cfg, r: Runner):
     with palette_path.open("rb") as fh:
         palette = tomllib.load(fh)
     apply_bar_colors(palette, r)
+    apply_sddm(name, r)
 
     if not have_display():
         log("нет DISPLAY, живую сессию не трогаю")
@@ -167,6 +215,8 @@ def apply_theme(cfg, r: Runner):
     if socks:
         log(f"kitty: перекрашено окон -- {len(socks)}")
 
+    apply_gtk(theme_dir, palette, r)
+    apply_qt(theme_dir, r)
     r.signal_to("vxbar", signal.SIGUSR1)
     restart_dunst(r)
     apply_wallpaper(theme_dir, r)
@@ -200,9 +250,125 @@ def apply_bar_colors(palette, r: Runner):
     r.write(path, "\n".join(out) + "\n")
 
 
+# Наш блок в чужом gtk.css отмечен маркерами: при следующем применении он
+# заменяется целиком, а всё, что пользователь написал вокруг, остаётся.
+GTK_BEGIN = "/* >>> vxwm-rice >>> */"
+GTK_END = "/* <<< vxwm-rice <<< */"
+
+
+def is_dark(hex_color: str) -> bool:
+    """Тёмная ли палитра. Считаем по яркости фона обычного окна: светлая
+    paper и тёмная carbon должны по-разному отвечать приложениям, которые
+    спрашивают систему про тёмный режим."""
+    h = hex_color.lstrip("#")
+    r_, g_, b_ = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    # Коэффициенты Rec. 601: глаз видит зелёный ярче синего, и без них
+    # синеватый фон abyss считался бы светлее, чем он есть.
+    return (0.299 * r_ + 0.587 * g_ + 0.114 * b_) < 128
+
+
+def graft(existing: str, block: str) -> str:
+    """Вставляет блок в конец файла, заменяя прежний между маркерами."""
+    body = block.strip("\n")
+    marked = f"{GTK_BEGIN}\n{body}\n{GTK_END}\n"
+    start = existing.find(GTK_BEGIN)
+    end = existing.find(GTK_END)
+    if start != -1 and end > start:
+        return existing[:start] + marked + existing[end + len(GTK_END):].lstrip("\n")
+    if not existing.strip():
+        return marked
+    return existing.rstrip("\n") + "\n\n" + marked
+
+
+def set_ini_key(text: str, key: str, value: str, section: str = "Settings") -> str:
+    """Меняет одну строку key=value в ini-файле, не трогая остальные. Если
+    ключа нет, он дописывается в начало названной секции, а не в конец файла:
+    ниже могут быть другие секции, и ключ попал бы в чужую."""
+    lines = text.splitlines()
+    head = f"[{section}]"
+    for i, line in enumerate(lines):
+        if line.split("=", 1)[0].strip() == key:
+            lines[i] = f"{key}={value}"
+            break
+    else:
+        at = lines.index(head) + 1 if head in lines else len(lines)
+        if head not in lines:
+            lines.append(head)
+            at = len(lines)
+        lines.insert(at, f"{key}={value}")
+    return "\n".join(lines) + "\n"
+
+
+def apply_gtk(theme_dir: Path, palette: dict, r: Runner):
+    """Цвета GTK-приложений. Установленную тему (gtk-theme-name) не трогаем --
+    поверх неё кладётся палитра риса, и этого хватает, чтобы Thunar и прочие
+    следовали за сменой темы. GTK сам следит за gtk.css и перекрашивает
+    открытые окна, перезапуск не нужен."""
+    css = theme_dir / "gtk.css"
+    if not css.exists():
+        log("gtk.css темой не собран, пропускаю")
+        return
+    block = css.read_text()
+
+    for version in ("gtk-3.0", "gtk-4.0"):
+        path = CONFIG_HOME / version / "gtk.css"
+        existing = path.read_text() if path.exists() else ""
+        r.write(path, graft(existing, block))
+
+        ini = CONFIG_HOME / version / "settings.ini"
+        if ini.exists():
+            dark = "1" if is_dark(palette["ui"]["norm_bg"]) else "0"
+            r.write(ini, set_ini_key(ini.read_text(),
+                                     "gtk-application-prefer-dark-theme", dark))
+    log("цвета GTK: gtk-3.0 и gtk-4.0")
+
+    # Портал и GTK4 спрашивают тёмный режим у gsettings, а не у settings.ini.
+    if have_display() and shutil.which("gsettings"):
+        scheme = "prefer-dark" if is_dark(palette["ui"]["norm_bg"]) else "prefer-light"
+        r.run(["gsettings", "set", "org.gnome.desktop.interface",
+               "color-scheme", scheme])
+
+
+def apply_qt(theme_dir: Path, r: Runner):
+    """Цвета Qt-приложений. qt5ct/qt6ct держат палитру отдельным файлом схемы,
+    поэтому кладём её рядом со штатными и переключаем конфиг на неё. Стиль
+    (style=Breeze и прочее) не трогаем -- меняются только цвета.
+
+    Живую сессию это не перекрашивает: Qt читает схему при старте приложения.
+    Открытые Qt-окна подхватят тему после перезапуска."""
+    src = theme_dir / "qtct-colors.conf"
+    if not src.exists():
+        return
+    touched = []
+    for tool in ("qt5ct", "qt6ct"):
+        base = CONFIG_HOME / tool
+        if not base.is_dir():
+            continue
+        scheme = base / "colors" / "vxwm-rice.conf"
+        r.write(scheme, src.read_text())
+        conf = base / f"{tool}.conf"
+        if conf.exists():
+            text = set_ini_key(conf.read_text(), "color_scheme_path",
+                               str(scheme), "Appearance")
+            text = set_ini_key(text, "custom_palette", "true", "Appearance")
+            r.write(conf, text)
+        touched.append(tool)
+    if touched:
+        log("цвета Qt: " + " и ".join(touched) + " (применятся при перезапуске окон)")
+
+
+def find_wallpaper(theme_dir: Path):
+    """Обои ищем сперва в живой теме, потом в репозитории: собранные темы
+    лежат в ~/.config, а картинки версионируются рядом с палитрами."""
+    for base in (theme_dir, RICE / "themes" / theme_dir.name):
+        for ext in (".png", ".jpg", ".jpeg"):
+            if (base / f"wallpaper{ext}").exists():
+                return base / f"wallpaper{ext}"
+    return None
+
+
 def apply_wallpaper(theme_dir: Path, r: Runner):
-    wall = next((theme_dir / f"wallpaper{ext}" for ext in (".png", ".jpg", ".jpeg")
-                 if (theme_dir / f"wallpaper{ext}").exists()), None)
+    wall = find_wallpaper(theme_dir)
     if wall is None:
         log("обоев у темы нет, оставляю прежние")
         return
@@ -244,6 +410,8 @@ def apply_compositor(cfg, r: Runner):
     c = cfg["compositor"]
     print("композитор")
     if not c.get("enabled", True):
+        # Сначала сторож, иначе он поднимет picom обратно через секунду.
+        r.run(["pkill", "-f", KEEPER_NAME])
         r.run(["pkill", "-x", "picom"])
         log("выключен")
         return
@@ -254,6 +422,8 @@ def apply_compositor(cfg, r: Runner):
     subs = {
         "VSYNC": b("vsync"),
         "ANIMATIONS": b("animations"),
+        "OPEN_ANIMATION": c.get("open_animation", "zoom"),
+        "CLOSE_ANIMATION": c.get("close_animation", "slide-down"),
         "SHADOW": b("shadow"),
         "SHADOW_RADIUS": c.get("shadow_radius", 18),
         "SHADOW_OPACITY": c.get("shadow_opacity", 0.4),
@@ -261,7 +431,12 @@ def apply_compositor(cfg, r: Runner):
         "BLUR_STRENGTH": c.get("blur_strength", 6),
         "FADING": b("fading"),
         "CORNER_RADIUS": c.get("corner_radius", 8),
-        "BAR_OPACITY": c.get("bar_opacity", 0.88),
+        "BAR_OPACITY": c.get("bar_opacity", 0.80),
+        "INACTIVE_OPACITY": c.get("inactive_opacity", 0.82),
+        "MENU_OPACITY": c.get("menu_opacity", 0.85),
+        "BAR_OPACITY_PCT": pct(c.get("bar_opacity", 0.80)),
+        "WINDOW_OPACITY_PCT": pct(c.get("window_opacity", 0.90)),
+        "MENU_OPACITY_PCT": pct(c.get("menu_opacity", 0.85)),
     }
     tmpl = (RICE / "templates" / "picom.conf.tmpl").read_text()
     dest = CONFIG_HOME / "picom" / "picom.conf"
@@ -272,8 +447,32 @@ def apply_compositor(cfg, r: Runner):
     if r.dry:
         log("перезапустил бы picom")
         return
+    # Дожидаемся смерти старого: он до последнего держит composite overlay, и
+    # запущенный внахлёст новый picom молча падает с "another composite manager
+    # is already running". Раньше так и выходило -- после apply.py не оставалось
+    # ни одного picom, и прозрачность с размытием просто пропадали.
+    # Сторожа гасим первым: он для того и живёт, чтобы поднимать упавший
+    # picom, и наш pkill он принял бы за падение.
+    subprocess.run(["pkill", "-f", KEEPER_NAME], capture_output=True)
     subprocess.run(["pkill", "-x", "picom"], capture_output=True)
-    if shutil.which("picom"):
+    for _ in range(40):
+        if subprocess.run(["pgrep", "-x", "picom"],
+                          capture_output=True).returncode != 0:
+            break
+        time.sleep(0.05)
+    else:
+        subprocess.run(["pkill", "-9", "-x", "picom"], capture_output=True)
+        time.sleep(0.2)
+    if not shutil.which("picom"):
+        return
+    # Через сторожа: picom этой сборки иногда падает сам по себе, и без него
+    # это выглядит как "разом пропали все анимации" без единого следа на
+    # экране. Нет скрипта -- запускаем picom напрямую, как раньше.
+    if KEEPER.exists():
+        subprocess.Popen([str(KEEPER), str(dest)], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log("picom перезапущен под сторожем")
+    else:
         subprocess.Popen(["picom", "-b", "--config", str(dest)],
                          start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -1,0 +1,145 @@
+/* Тема {{NAME}} ({{DESCRIPTION}}) для GTK. Собрано из палитры генератором
+   mktheme.py -- правки затрутся.
+
+   Файл переопределяет именованные цвета GTK и, следом, те места, где темы
+   обычно задают цвет мимо них. Установленная тема (gtk-theme-name) остаётся
+   своя: здесь меняется только палитра поверх неё, иначе каждую смену темы
+   риса пришлось бы сопровождать установкой отдельной GTK-темы.
+
+   GTK перечитывает этот файл сам, как только он изменится, поэтому открытые
+   приложения перекрашиваются без перезапуска. */
+
+@define-color theme_bg_color {{NORM_BG}};
+@define-color theme_base_color {{DIM_BG}};
+@define-color theme_fg_color {{NORM_FG}};
+@define-color theme_text_color {{NORM_FG}};
+@define-color theme_selected_bg_color {{SEL_BORDER}};
+@define-color theme_selected_fg_color {{SEL_FG}};
+@define-color insensitive_bg_color {{NORM_BG}};
+@define-color insensitive_fg_color {{MUTED}};
+@define-color borders {{NORM_BORDER}};
+@define-color unfocused_borders {{NORM_BORDER}};
+@define-color headerbar_bg_color {{SEL_BG}};
+@define-color headerbar_fg_color {{SEL_FG}};
+@define-color popover_bg_color {{DIM_BG}};
+@define-color popover_fg_color {{NORM_FG}};
+@define-color accent_color {{SEL_BORDER}};
+@define-color accent_bg_color {{SEL_BORDER}};
+@define-color accent_fg_color {{SEL_FG}};
+@define-color window_bg_color {{NORM_BG}};
+@define-color window_fg_color {{NORM_FG}};
+@define-color view_bg_color {{DIM_BG}};
+@define-color view_fg_color {{NORM_FG}};
+@define-color card_bg_color {{SEL_BG}};
+@define-color card_fg_color {{SEL_FG}};
+
+/* Фон и текст окон. Без этого темы, задающие цвет напрямую, перебивают
+   именованные цвета выше. */
+window,
+dialog,
+.background {
+    background-color: {{NORM_BG}};
+    color: {{NORM_FG}};
+}
+
+/* Списки, деревья, текстовые поля -- «рабочая» поверхность, она чуть темнее
+   фона окна, как dim_bg в rofi. */
+treeview,
+textview,
+textview text,
+iconview,
+list,
+entry,
+spinbutton {
+    background-color: {{DIM_BG}};
+    color: {{NORM_FG}};
+}
+
+entry,
+spinbutton {
+    border-color: {{NORM_BORDER}};
+}
+
+entry:focus,
+spinbutton:focus {
+    border-color: {{SEL_BORDER}};
+}
+
+/* Выделение везде одно и то же: цвет рамки активного окна. Так подсветка
+   файла в менеджере и подсветка окна в vxwm -- один и тот же сигнал. */
+*:selected,
+*:selected *,
+treeview:selected,
+list row:selected,
+menuitem:hover,
+.view:selected {
+    background-color: {{SEL_BORDER}};
+    color: {{SEL_FG}};
+}
+
+/* Заголовки и панели инструментов: фон активного окна. */
+headerbar,
+.titlebar,
+toolbar,
+.toolbar,
+notebook header {
+    background-color: {{SEL_BG}};
+    color: {{SEL_FG}};
+    border-color: {{NORM_BORDER}};
+}
+
+/* Кнопки: по фону сливаются с панелью, выделяются только рамкой. */
+button {
+    background-image: none;
+    background-color: {{SEL_BG}};
+    color: {{SEL_FG}};
+    border-color: {{NORM_BORDER}};
+}
+
+button:hover {
+    background-color: {{NORM_BORDER}};
+}
+
+button:active,
+button:checked {
+    background-color: {{SEL_BORDER}};
+    color: {{SEL_FG}};
+}
+
+/* Выпадающие окна -- фон dim_bg, как у rofi. */
+menu,
+popover,
+popover contents,
+.context-menu {
+    background-color: {{DIM_BG}};
+    color: {{NORM_FG}};
+    border-color: {{NORM_BORDER}};
+}
+
+/* Приглушённый текст: подсказки, неактивные пункты. */
+label:disabled,
+button:disabled,
+menuitem:disabled,
+.dim-label {
+    color: {{MUTED}};
+}
+
+/* Боковые панели файловых менеджеров: тот же фон, что у окна. */
+.sidebar,
+placessidebar,
+placessidebar list {
+    background-color: {{NORM_BG}};
+    color: {{NORM_FG}};
+}
+
+scrollbar {
+    background-color: {{NORM_BG}};
+}
+
+scrollbar slider {
+    background-color: {{NORM_BORDER}};
+}
+
+scrollbar slider:hover {
+    background-color: {{MUTED}};
+}

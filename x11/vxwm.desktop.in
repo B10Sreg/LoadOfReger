@@ -2,6 +2,6 @@
 Name=vxwm
 Comment=vxwm-rice: бесконечные теги, внешний бар, анимации
 Exec=@SESSION@
-TryExec=@SESSION@
+TryExec=vxwm
 Type=Application
 DesktopNames=vxwm

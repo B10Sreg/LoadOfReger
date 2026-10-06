@@ -95,14 +95,14 @@ shadow-radius = {{SHADOW_RADIUS}};
 shadow-opacity = {{SHADOW_OPACITY}};
 shadow-offset-x = -{{SHADOW_RADIUS}};
 shadow-offset-y = -{{SHADOW_RADIUS}};
-shadow-exclude = [ "name = 'Notification'", "class_g = 'Rofi'" ];
+shadow-exclude = [ "name = 'Notification'", "class_g = 'Rofi'", "class_g = 'VarwinClient'" ];
 
 blur-method = "dual_kawase";
 blur-strength = {{BLUR_STRENGTH}};
 blur-background = {{BLUR}};
 # Бар (dock) теперь тоже размывается — раньше был в исключениях и оставался
 # полностью читаемым, но плоским; со стеклянным фоном смотрится живее.
-blur-background-exclude = [ "window_type = 'desktop'" ];
+blur-background-exclude = [ "window_type = 'desktop'", "class_g = 'VarwinClient'", "class_g = 'Varwin18'" ];
 
 # Fading & Opacity
 fading = {{FADING}};
@@ -129,7 +129,7 @@ wintypes:
 # под край экрана. Исключения ниже перекрывают это значение.
 inactive-opacity = {{INACTIVE_OPACITY}};
 inactive-opacity-override = false;
-focus-exclude = [ "window_type = 'dock'", "class_g = 'Rofi'" ];
+focus-exclude = [ "window_type = 'dock'", "class_g = 'Rofi'", "class_g = 'VarwinClient'" ];
 
 # --- Правила прозрачности для конкретных приложений ---
 # Проценты, а не доли: такой формат у picom. Считает их apply.py из
@@ -142,5 +142,7 @@ opacity-rule = [
   "{{WINDOW_OPACITY_PCT}}:class_g = 'Dolphin'",
   "{{WINDOW_OPACITY_PCT}}:class_g = 'firefox'",
   "{{BAR_OPACITY_PCT}}:class_g = 'vxwm'",   /* Сам бар: у него нет _NET_WM_WINDOW_TYPE=dock, поэтому таргетим по классу */
-  "{{MENU_OPACITY_PCT}}:class_g = 'Dunst'"
+  "{{MENU_OPACITY_PCT}}:class_g = 'Dunst'",
+  "100:class_g = 'VarwinClient'",
+  "100:class_g = 'Varwin18'"
 ];

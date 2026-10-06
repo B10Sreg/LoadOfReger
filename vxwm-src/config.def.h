@@ -44,6 +44,8 @@ static const Rule rules[] = {
     { "local-ai", NULL,       "Local AI", 0,            1,           -1 }, 
     /* Выпадающий терминал: всегда плавающий, тег ему назначает scratchpad.sh */
     { "scratchpad", NULL,     NULL,       0,            1,           -1 },
+    /* Varwin 3D Client: плавающее окно, чтобы тайлинг не ломал swapchain Vulkan */
+    { "VarwinClient", NULL,   NULL,       0,            1,           -1 },
 };
 
 /* === Layouts === */

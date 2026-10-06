@@ -3,6 +3,17 @@
 # берёт этот файл явно. Один файл на оба пути, чтобы сессия из меню входа и
 # сессия из tty вели себя одинаково.
 
+# Оптимизации драйверов для плавной анимации и устранения фризов
+if [ -d /proc/driver/nvidia ] || lsmod 2>/dev/null | grep -q '^nvidia'; then
+    # NVIDIA: отключаем буферизацию кадров в драйвере -- отклик анимаций мгновенный, без желе
+    export __GL_MaxFramesAllowed=1
+    # Ожидание vsync через usleep вместо busy-wait (устраняет просадки и нагрев)
+    export __GL_YIELD=USLEEP
+elif lsmod 2>/dev/null | grep -q '^amdgpu'; then
+    # AMD: многопоточный диспетчер Mesa OpenGL для максимальной плавности
+    export mesa_glthread=true
+fi
+
 # Qt: платформенную тему держит qt6ct, туда же apply.py кладёт палитру риса.
 # Без этой переменной Qt-программы (qBittorrent, VLC) останутся серо-синими,
 # сколько ни меняй тему.

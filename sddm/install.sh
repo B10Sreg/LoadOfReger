@@ -58,4 +58,4 @@ if ! systemctl is-enabled --quiet sddm.service 2>/dev/null; then
 	echo "sddm включён, стартует со следующей загрузки"
 fi
 
-echo "готово. Посмотреть, не выходя из сессии: sddm-greeter --test-mode --theme $DEST"
+echo "готово. Посмотреть, не выходя из сессии: sddm-greeter-qt6 --test-mode --theme $DEST"

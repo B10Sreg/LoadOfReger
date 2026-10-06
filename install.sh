@@ -91,7 +91,7 @@ PKGS_COMFORT=(
 )
 
 # Экран входа.
-PKGS_SDDM=(sddm)
+PKGS_SDDM=(sddm qt6-svg)
 
 # Программы, на которые повешены хоткеи в config.def.h. Рис без них работает,
 # но Mod+B, Mod+E и PrintScreen будут звать несуществующее.
@@ -815,6 +815,96 @@ RICEPY
     ok "раскладка: ${layout:-системная, риса не навязываю}"
 }
 
+# ----------------------------------------------------------- видеокарта
+detect_gpu() {
+    [ -n "${VXWM_GPU:-}" ] && { echo "$VXWM_GPU"; return; }
+    if [ -d /proc/driver/nvidia ] || lsmod 2>/dev/null | grep -q '^nvidia'; then echo nvidia
+    elif lsmod 2>/dev/null | grep -q '^amdgpu'; then echo amdgpu
+    elif lsmod 2>/dev/null | grep -qE '^(i915|xe)\b'; then echo intel
+    elif lspci -k 2>/dev/null | grep -iE 'vga|3d|display' | grep -qi nvidia; then echo nvidia
+    elif lspci -k 2>/dev/null | grep -iE 'vga|3d|display' | grep -qiE 'amd|radeon'; then echo amdgpu
+    elif lspci -k 2>/dev/null | grep -iE 'vga|3d|display' | grep -qi intel; then echo intel
+    else echo unknown
+    fi
+}
+
+setup_gpu_tuning() {
+    local gpu
+    gpu=$(detect_gpu)
+    step "Оптимизация видеокарты для анимаций и устранения фризов ($gpu)"
+
+    case "$gpu" in
+        nvidia)
+            ok "обнаружен драйвер NVIDIA: выключаем use_damage и настраиваем конвейер композиции"
+            if [ -f "$RICE_HOME/rice.toml" ]; then
+                sed -i 's/^use_damage\s*=.*/use_damage = false/' "$RICE_HOME/rice.toml"
+                ok "rice.toml: use_damage = false (устраняет мерцания и артефакты picom на NVIDIA)"
+            fi
+            if [ "$DRY" = 1 ]; then
+                printf '    %s[dry]%s записал бы /etc/X11/xorg.conf.d/20-nvidia.conf\n' "$Y" "$N"
+            else
+                sudo install -d /etc/X11/xorg.conf.d
+                sudo tee /etc/X11/xorg.conf.d/20-nvidia.conf >/dev/null <<'CONF'
+Section "Device"
+    Identifier "NVIDIA Card"
+    Driver     "nvidia"
+    Option     "TripleBuffer" "on"
+    Option     "AllowIndirectGLXProtocol" "off"
+    Option     "metamodes" "nvidia-auto-select +0+0 {ForceCompositionPipeline=On, ForceFullCompositionPipeline=On}"
+EndSection
+CONF
+                ok "/etc/X11/xorg.conf.d/20-nvidia.conf (TripleBuffer + FullCompositionPipeline)"
+            fi
+            ;;
+        amdgpu)
+            ok "обнаружен драйвер AMD (amdgpu): включаем аппаратный TearFree и DRI3"
+            if [ -f "$RICE_HOME/rice.toml" ]; then
+                sed -i 's/^use_damage\s*=.*/use_damage = true/' "$RICE_HOME/rice.toml"
+                ok "rice.toml: use_damage = true (максимальная производительность amdgpu)"
+            fi
+            if [ "$DRY" = 1 ]; then
+                printf '    %s[dry]%s записал бы /etc/X11/xorg.conf.d/20-amdgpu.conf\n' "$Y" "$N"
+            else
+                sudo install -d /etc/X11/xorg.conf.d
+                sudo tee /etc/X11/xorg.conf.d/20-amdgpu.conf >/dev/null <<'CONF'
+Section "Device"
+    Identifier "AMD Graphics"
+    Driver     "amdgpu"
+    Option     "TearFree" "true"
+    Option     "VariableRefresh" "true"
+    Option     "DRI" "3"
+EndSection
+CONF
+                ok "/etc/X11/xorg.conf.d/20-amdgpu.conf (TearFree + VariableRefresh)"
+            fi
+            ;;
+        intel)
+            ok "обнаружен драйвер Intel: включаем TearFree и DRI3"
+            if [ -f "$RICE_HOME/rice.toml" ]; then
+                sed -i 's/^use_damage\s*=.*/use_damage = true/' "$RICE_HOME/rice.toml"
+                ok "rice.toml: use_damage = true"
+            fi
+            if [ "$DRY" = 1 ]; then
+                printf '    %s[dry]%s записал бы /etc/X11/xorg.conf.d/20-intel.conf\n' "$Y" "$N"
+            else
+                sudo install -d /etc/X11/xorg.conf.d
+                sudo tee /etc/X11/xorg.conf.d/20-intel.conf >/dev/null <<'CONF'
+Section "Device"
+    Identifier "Intel Graphics"
+    Driver     "modesetting"
+    Option     "TearFree" "true"
+    Option     "DRI" "3"
+EndSection
+CONF
+                ok "/etc/X11/xorg.conf.d/20-intel.conf (modesetting TearFree)"
+            fi
+            ;;
+        *)
+            warn "видеокарта не определена однозначно, настройки Xorg оставлены системными"
+            ;;
+    esac
+}
+
 bootstrap_rice() {
     step "Конфиг риса"
     run mkdir -p "$RICE_HOME"
@@ -844,6 +934,28 @@ bootstrap_rice() {
         run env -u DISPLAY "$BIN/vxbar" >/dev/null 2>&1 || true
         [ -f "$CFG/vxbar/config.toml" ] && ok "config.toml бара создан"
     fi
+
+    # Flameshot в чистом X11 пытается использовать xdg-desktop-portal,
+    # который без портала скриншотов вечно висит. Включаем legacy X11 метод.
+    if command -v flameshot >/dev/null 2>&1; then
+        run mkdir -p "$CFG/flameshot"
+        if [ ! -f "$CFG/flameshot/flameshot.ini" ]; then
+            cat <<EOF > "$CFG/flameshot/flameshot.ini"
+[General]
+disabledTrayIcon=true
+savePath=$HOME/Pictures
+savePathFixed=true
+useX11LegacyScreenshot=true
+EOF
+            ok "flameshot.ini (legacy X11 захват)"
+        elif ! grep -qs 'useX11LegacyScreenshot' "$CFG/flameshot/flameshot.ini"; then
+            echo "useX11LegacyScreenshot=true" >> "$CFG/flameshot/flameshot.ini"
+            ok "flameshot.ini (добавлен legacy X11 захват)"
+        fi
+    fi
+
+    # Настройка драйвера и оптимизация параметров под видеокарту
+    setup_gpu_tuning
 
     step "Применяю рис"
     # apply.py разворачивает rice.toml во все конфиги; живую сессию он трогает,
@@ -922,8 +1034,8 @@ EOF
 
         sudo bash vxwm/hibernate-setup.sh
 
-    Видеокарта NVIDIA: обязательно прочти docs/nvidia.md -- без пары
-    настроек композитор будет рвать картинку и ронять анимации.
+    Видеокарта: автоопределение (NVIDIA/AMD/Intel), параметры Xorg,
+    picom и драйвера настроены для максимальной плавности без фризов.
 EOF
 }
 

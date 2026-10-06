@@ -407,6 +407,17 @@ def apply_windows(cfg, r: Runner):
 
 # -------------------------------------------------------------- композитор
 
+def detect_gpu() -> str:
+    """Определение видеокарты по загруженным модулям ядра."""
+    if Path("/proc/driver/nvidia").exists() or Path("/sys/module/nvidia").exists():
+        return "nvidia"
+    if Path("/sys/module/amdgpu").exists():
+        return "amdgpu"
+    if Path("/sys/module/i915").exists() or Path("/sys/module/xe").exists():
+        return "intel"
+    return "unknown"
+
+
 def apply_compositor(cfg, r: Runner):
     c = cfg["compositor"]
     print("композитор")
@@ -420,10 +431,18 @@ def apply_compositor(cfg, r: Runner):
     def b(key):
         return "true" if c.get(key, True) else "false"
 
+    gpu = detect_gpu()
+    # На NVIDIA частичная перерисовка (use-damage = true) вызывает мерцание,
+    # разрывы и лаги анимаций. Если не задано явно -- подбираем под драйвер:
+    if "use_damage" in c:
+        use_damage = "true" if c["use_damage"] else "false"
+    else:
+        use_damage = "false" if gpu == "nvidia" else "true"
+
     subs = {
         "VSYNC": b("vsync"),
         "BACKEND": c.get("backend", "glx"),
-        "USE_DAMAGE": b("use_damage"),
+        "USE_DAMAGE": use_damage,
         "ANIMATIONS": b("animations"),
         "OPEN_ANIMATION": c.get("open_animation", "zoom"),
         "CLOSE_ANIMATION": c.get("close_animation", "slide-down"),

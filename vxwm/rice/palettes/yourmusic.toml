@@ -1,0 +1,41 @@
+# Палитра темы. Из неё генерируются colors.Xresources, rofi.rasi и
+# kitty.conf -- см. vxwm/rice/mktheme.py.
+# Концепция: YourMusic AMOLED Glassmorphism (смягчённый контраст, матовый цинк и стекло)
+
+name = "yourmusic"
+description = "AMOLED монохром Apple Music Glassmorphism с мягким контрастом"
+
+[ui]
+# Шесть цветов, которые видит vxwm: текст, фон и рамка для обычного
+# и для активного окна. Из них же выводятся цвета бара.
+norm_fg     = "#a1a1aa"
+norm_bg     = "#08080a"
+norm_border = "#1c1c20"
+sel_fg      = "#f4f4f5"
+sel_bg      = "#222227"
+sel_border  = "#71717a"
+
+# Приглушённый текст: подсказка в rofi, пустые теги в баре.
+muted       = "#52525b"
+
+# Фон выпадающих окон (rofi) и плашек (SurfaceMatte / Glass).
+dim_bg      = "#121215"
+
+[ansi]
+# Палитра терминала: AMOLED основа, мягкие Zinc градации и статусные акценты YourMusic
+color0  = "#08080a"
+color1  = "#f87171"
+color2  = "#4efa96"
+color3  = "#fbbf24"
+color4  = "#60a5fa"
+color5  = "#c084fc"
+color6  = "#2dd4bf"
+color7  = "#a1a1aa"
+color8  = "#52525b"
+color9  = "#fca5a5"
+color10 = "#86efac"
+color11 = "#fde047"
+color12 = "#93c5fd"
+color13 = "#e879f9"
+color14 = "#5eead4"
+color15 = "#f4f4f5"

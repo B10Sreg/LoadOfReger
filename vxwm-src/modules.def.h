@@ -101,6 +101,7 @@ Even though this sounds complex, it is actually pretty lightweight ~250 l.o.c, a
                          // незамапленного окна picom не обновляет w->g -- условие не
                          // выполняется никогда. Поэтому листание собрано на обычной пружине
                          // (ANIM_IN_TAG): окно едет, оставаясь замапленным.
+#define WORKSPACE_SWITCHER 1 // Windows-style Alt+Tab overlay HUD for switching workspaces
 #define DIRECTIONAL_FOCUS 0 // yeah.
 #define DIRECTIONAL_MOVE 1 
 /* Makes moving windows in tiled layout possible with keyboard and it is directional,

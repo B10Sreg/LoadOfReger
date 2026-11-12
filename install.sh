@@ -641,11 +641,16 @@ link_scripts() {
     link "$REPO/vxwm/scratchpad.sh"  vxwm-scratchpad.sh
     link "$REPO/vxwm/session.sh"     vxwm-session
     link "$REPO/vxwm/rice/apply.py"  vxwm-rice-apply
+    link "$REPO/vxwm/vxwm-search.sh" vxwm-search
+    link "$REPO/vxwm/vxwm-search.sh" vxwm-omni
 
     # Автозапуск: vxwm зовёт его по фиксированному пути из config.def.h.
     run ln -sfn "$REPO/vxwm/autostart.sh" "$CFG/vxwm/autostart.sh"
-    ok "vxwm-theme.sh, vxwm-powermenu.sh, vxwm-power.sh, vxwm-scratchpad.sh, vxwm-session, vxwm-rice-apply"
+    run mkdir -p "$CFG/rofi/scripts"
+    run ln -sfn "$REPO/vxwm/search.py" "$CFG/rofi/scripts/search"
+    ok "vxwm-theme.sh, vxwm-powermenu.sh, vxwm-power.sh, vxwm-scratchpad.sh, vxwm-session, vxwm-rice-apply, vxwm-search"
     ok "$CFG/vxwm/autostart.sh"
+    ok "$CFG/rofi/scripts/search"
 }
 
 # ------------------------------------------------------- вход в сессию

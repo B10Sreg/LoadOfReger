@@ -56,7 +56,7 @@ moveresize(const Arg *arg)
 void
 moveresize(const Arg *arg)
 {
-  if (selmon->sel && selmon->sel->isfullscreen)
+  if (selmon->sel && (selmon->sel->isfullscreen || selmon->sel->isunmovable))
     return;
   int dx = ((int *)arg->v)[0];
   int dy = ((int *)arg->v)[1];

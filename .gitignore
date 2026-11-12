@@ -15,3 +15,7 @@ vxbar-settings/vxbar-settings
 vxwm-src/vxwm
 vxwm-src/config.h
 vxwm-src/modules.h
+
+# Python кэш
+__pycache__/
+*.pyc

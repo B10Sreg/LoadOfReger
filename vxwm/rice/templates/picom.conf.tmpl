@@ -38,13 +38,13 @@ vsync = {{VSYNC}};
 # стояли именно они: picom их молча игнорировал и крутил анимации на своих
 # значениях по умолчанию, поэтому настройка тут ни на что не влияла.
 animations = {{ANIMATIONS}};
-animation-stiffness-in-tag = 300.0;
-animation-stiffness-tag-change = 300.0;
-animation-window-mass = 0.3;
-animation-dampening = 16.0;
+animation-stiffness-in-tag = {{ANIMATION_STIFFNESS_IN_TAG}};
+animation-stiffness-tag-change = {{ANIMATION_STIFFNESS_TAG_CHANGE}};
+animation-window-mass = {{ANIMATION_WINDOW_MASS}};
+animation-dampening = {{ANIMATION_DAMPENING}};
 # Обязателен при затухании ниже критического: без него окно проезжает мимо
 # места и возвращается.
-animation-clamping = true;
+animation-clamping = {{ANIMATION_CLAMPING}};
 
 # --- Смена тега ---
 # Листание рисует эта же пружина на ветке ANIM_IN_TAG (win.c:721): у

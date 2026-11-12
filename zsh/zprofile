@@ -6,6 +6,8 @@ case ":$PATH:" in
     *) export PATH="$HOME/.local/bin:$PATH" ;;
 esac
 
+export PATH="/mnt/mydata/Arch/Programs/PhotoCraft:/mnt/mydata/Arch/Programs/FilmCraft:/mnt/mydata/Arch/Programs/EffectCraft:$PATH"
+
 # Автозапуск X при логине на tty1 (замена SDDM для vxwm-сессии)
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
     exec startx

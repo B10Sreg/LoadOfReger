@@ -36,16 +36,18 @@ static const char *tags[] = { "1:dev", "2:web", "3:sys", "4:doc", "5:ai", "6:med
 
 /* === Правила окон === */
 static const Rule rules[] = {
-    /* class      instance    title       tags mask     isfloating   monitor */
-    { "kitty",    NULL,       NULL,       0,            0,           -1 },
-    { "firefox",  NULL,       NULL,       1 << 1,       0,           -1 }, /* Firefox всегда на 2-м теге */
-    { "Thunar",   NULL,       NULL,       0,            0,           -1 },
+    /* class          instance    title       tags mask     isfloating  isunmovable  monitor */
+    { "kitty",        NULL,       NULL,       0,            0,          0,           -1 },
+    { "firefox",      NULL,       NULL,       1 << 1,       0,          0,           -1 }, /* Firefox всегда на 2-м теге */
+    { "Thunar",       NULL,       NULL,       0,            0,          0,           -1 },
     /* Правило для локального ИИ: всегда плавающее окно по центру */
-    { "local-ai", NULL,       "Local AI", 0,            1,           -1 }, 
+    { "local-ai",     NULL,       "Local AI", 0,            1,          0,           -1 }, 
     /* Выпадающий терминал: всегда плавающий, тег ему назначает scratchpad.sh */
-    { "scratchpad", NULL,     NULL,       0,            1,           -1 },
+    { "scratchpad",   NULL,       NULL,       0,            1,          0,           -1 },
     /* Varwin 3D Client: плавающее окно, чтобы тайлинг не ломал swapchain Vulkan */
-    { "VarwinClient", NULL,   NULL,       0,            1,           -1 },
+    { "VarwinClient", NULL,       NULL,       0,            1,          0,           -1 },
+    /* TUI Лаунчер приложений: всегда поверх всех окон, по центру, перетаскивать нельзя */
+    { "vxwm-launcher",NULL,       NULL,       0,            1,          1,           -1 },
 };
 
 /* === Layouts === */
@@ -66,14 +68,22 @@ static const Layout layouts[] = {
 
 #define TAGKEYS(KEY,TAG) \
     { MODKEY,                       KEY,      view,           {.ui = 1 << TAG} }, \
-    { MODKEY|ControlMask,           KEY,      toggleview,     {.ui = 1 << TAG} }, \
-    { MODKEY|ShiftMask,             KEY,      tag,            {.ui = 1 << TAG} }, \
-    { MODKEY|ControlMask|ShiftMask, KEY,      toggletag,      {.ui = 1 << TAG} },
+    { MODKEY|ControlMask,           KEY,      movetoexacttag, {.ui = 1 << TAG} }, \
+    { MODKEY|ShiftMask,             KEY,      movetoexacttag, {.ui = 1 << TAG} }, \
+    { MODKEY|ControlMask|ShiftMask, KEY,      tag,            {.ui = 1 << TAG} },
+
+#define SUPERTAGKEYS(KEY,TAG) \
+    { Mod4Mask,                       KEY,      view,           {.ui = 1 << TAG} }, \
+    { Mod4Mask|ControlMask,           KEY,      movetoexacttag, {.ui = 1 << TAG} }, \
+    { Mod4Mask|ShiftMask,             KEY,      movetoexacttag, {.ui = 1 << TAG} }, \
+    { Mod4Mask|ControlMask|ShiftMask, KEY,      tag,            {.ui = 1 << TAG} },
 
 /* === Команды === */
 static char dmenumon[2] = "0";
-/* Rofi теперь вызывается с жестко зашитым путем к скомпилированной теме */
-static const char *dmenucmd[]   = { "rofi", "-show", "drun", NULL };
+/* TUI Лаунчер приложений */
+static const char *launchercmd[] = { "vxwm-launcher", NULL };
+/* Ультимативный поиск: приложения, калькулятор, веб, ИИ, файлы, команды */
+static const char *dmenucmd[]   = { "vxwm-search", NULL };
 static const char *termcmd[]    = { "kitty", NULL };
 static const char *browsercmd[] = { "firefox", NULL };
 static const char *filecmd[]  = { "thunar", NULL };
@@ -84,7 +94,7 @@ static const char *autostart[] = {
     NULL /* Финальный маркер завершения массива */
 };
 /* VibeAI Panel: Запуск плавающего инстанса Kitty с Ollama */
-static const char *aicmd[]    = { "kitty", "--class", "local-ai", "-T", "Local AI", "-e", "ollama", "run", "llama3", NULL };
+static const char *aicmd[]    = { "kitty", "--class", "local-ai", "-T", "Local AI", "-e", "ollama", "run", "hermes-8k:latest", NULL };
 
 /* Мультимедиа (Управление звуком и медиа-плеером) */
 static const char *volup[]      = { "wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%+", NULL };
@@ -116,7 +126,9 @@ static Key keys[] = {
     
     /* 1. Запуск Приложений */
     { MODKEY,              XK_Return, spawn,          {.v = termcmd } },
-    { MODKEY,              XK_p,      spawn,          {.v = dmenucmd } },
+    { MODKEY,              XK_p,      spawn,          {.v = launchercmd } }, /* TUI Лаунчер */
+    { Mod4Mask,            XK_p,      spawn,          {.v = launchercmd } }, /* Super+P */
+    { MODKEY|ControlMask,  XK_p,      spawn,          {.v = dmenucmd } },    /* vxwm-search */
     { MODKEY,              XK_b,      spawn,          {.v = browsercmd } },
     { MODKEY,              XK_e,      spawn,          {.v = filecmd } },
     { MODKEY,              XK_a,      spawn,          {.v = aicmd } },       /* Вызов VibeAI (local-ai) */
@@ -139,6 +151,9 @@ static Key keys[] = {
     { MODKEY,              XK_j,      focusstack,     {.i = +1 } },
     { MODKEY,              XK_k,      focusstack,     {.i = -1 } },
     { MODKEY|ShiftMask,    XK_Return, zoom,           {0} },                 /* Перенос окна в мастер-зону (Zoom) */
+    { MODKEY|ControlMask,  XK_Return, zoom,           {0} },
+    { Mod4Mask|ShiftMask,  XK_Return, zoom,           {0} },
+    { Mod4Mask|ControlMask, XK_Return, zoom,          {0} },
     
     /* 4. Layouts (Раскладки) */
     { MODKEY,              XK_t,      setlayout,      {.v = &layouts[0]} },  /* Tile */
@@ -146,6 +161,13 @@ static Key keys[] = {
     { MODKEY,              XK_m,      setlayout,      {.v = &layouts[2]} },  /* Monocle */
     { MODKEY,              XK_space,  setlayout,      {0} },                 /* Переключение предыдущего layout */
     { MODKEY|ShiftMask,    XK_space,  togglefloating, {0} },
+    { MODKEY|ControlMask,  XK_space,  togglefloating, {0} },
+    { Mod4Mask,            XK_t,      setlayout,      {.v = &layouts[0]} },  /* Super+T: Tile */
+    { Mod4Mask,            XK_f,      setlayout,      {.v = &layouts[1]} },  /* Super+F: Floating / Canvas */
+    { Mod4Mask,            XK_m,      setlayout,      {.v = &layouts[2]} },  /* Super+M: Monocle */
+    { Mod4Mask,            XK_space,  setlayout,      {0} },
+    { Mod4Mask|ShiftMask,  XK_space,  togglefloating, {0} },
+    { Mod4Mask|ControlMask, XK_space, togglefloating, {0} },
     
     /* 5. Размер мастер-окна */
     { MODKEY,              XK_h,      setmfact,       {.f = -0.05} },
@@ -157,10 +179,27 @@ static Key keys[] = {
     { MODKEY|ShiftMask,    XK_equal,  setgaps,        {.i = 0} },   /* сброс в 0 */
     
     /* 6. Канвас (VXWM Specific) */
-    { MODKEY|ControlMask,  XK_h,      movecanvas,     {.i = 0} },
-    { MODKEY|ControlMask,  XK_l,      movecanvas,     {.i = 1} },
-    { MODKEY|ControlMask,  XK_k,      movecanvas,     {.i = 2} },
-    { MODKEY|ControlMask,  XK_j,      movecanvas,     {.i = 3} },
+    { MODKEY|ControlMask,  XK_h,            movecanvas,     {.i = 0} },
+    { MODKEY|ControlMask,  XK_l,            movecanvas,     {.i = 1} },
+    { MODKEY|ControlMask,  XK_k,            movecanvas,     {.i = 2} },
+    { MODKEY|ControlMask,  XK_j,            movecanvas,     {.i = 3} },
+    { Mod4Mask|ControlMask, XK_h,           movecanvas,     {.i = 0} },
+    { Mod4Mask|ControlMask, XK_l,           movecanvas,     {.i = 1} },
+    { Mod4Mask|ControlMask, XK_k,           movecanvas,     {.i = 2} },
+    { Mod4Mask|ControlMask, XK_j,           movecanvas,     {.i = 3} },
+    /* Масштабирование камеры холста (Zoom in / Zoom out / 100% Reset) */
+    { MODKEY|ControlMask,  XK_equal,        zoomcanvas,     {.i = +1} },
+    { MODKEY|ControlMask,  XK_plus,         zoomcanvas,     {.i = +1} },
+    { MODKEY|ControlMask,  XK_minus,        zoomcanvas,     {.i = -1} },
+    { MODKEY|ControlMask,  XK_0,            zoomcanvas,     {.i = 0} },
+    { Mod4Mask|ControlMask, XK_equal,       zoomcanvas,     {.i = +1} },
+    { Mod4Mask|ControlMask, XK_plus,        zoomcanvas,     {.i = +1} },
+    { Mod4Mask|ControlMask, XK_minus,       zoomcanvas,     {.i = -1} },
+    { Mod4Mask|ControlMask, XK_0,           zoomcanvas,     {.i = 0} },
+    { MODKEY,              XK_Home,         homecanvas,     {0} },
+    { MODKEY|ShiftMask,    XK_Home,         homecanvas,     {0} },
+    { Mod4Mask,            XK_Home,         homecanvas,     {0} },
+    { Mod4Mask|ShiftMask,  XK_Home,         homecanvas,     {0} },
     
     /* 7. Мультимедиа (Привязка системных Fn-кнопок) */
     { 0, XF86XK_AudioRaiseVolume,     spawn,          {.v = volup } },
@@ -172,30 +211,97 @@ static Key keys[] = {
     { 0, XF86XK_AudioNext,            spawn,          {.v = nexttrack } },
     { 0, XF86XK_AudioPrev,            spawn,          {.v = prevtrack } },
 
-    /* 8. Теги (Воркспейсы) */
+    /* 8. Теги и навигация между рабочими столами */
+#if WORKSPACE_SWITCHER
+    /* Windows-style Switcher HUD рабочих столов на Alt+Tab и Super+Tab */
+    { Mod1Mask,                     XK_Tab,          workspaceswitcher, {.i = +1} },
+    { Mod1Mask|ShiftMask,           XK_Tab,          workspaceswitcher, {.i = -1} },
+    { Mod1Mask|ControlMask,         XK_Tab,          workspaceswitcher, {.i = -1} },
+    { Mod4Mask,                     XK_Tab,          workspaceswitcher, {.i = +1} },
+    { Mod4Mask|ShiftMask,           XK_Tab,          workspaceswitcher, {.i = -1} },
+    { Mod4Mask|ControlMask,         XK_Tab,          workspaceswitcher, {.i = -1} },
+#endif
+    /* Быстрое переключение рабочих столов (влево / вправо) БЕЗ Shift: Mod+Left/Right или Super+Left/Right */
+    { MODKEY,                       XK_Left,         viewadjacent,   {.i = -1} },
+    { MODKEY,                       XK_Right,        viewadjacent,   {.i = +1} },
+    { Mod4Mask,                     XK_Left,         viewadjacent,   {.i = -1} },
+    { Mod4Mask,                     XK_Right,        viewadjacent,   {.i = +1} },
+    { MODKEY,                       XK_bracketleft,  viewadjacent,   {.i = -1} },
+    { MODKEY,                       XK_bracketright, viewadjacent,   {.i = +1} },
+    { Mod4Mask,                     XK_bracketleft,  viewadjacent,   {.i = -1} },
+    { Mod4Mask,                     XK_bracketright, viewadjacent,   {.i = +1} },
+
+    /* Перемещение окна на соседний стол с переходом ЧЕРЕЗ CTRL (БЕЗ Shift! 100% надежно, нет конфликта с раскладкой) */
+    { MODKEY|ControlMask,           XK_Left,         movetotag,      {.i = -1} },
+    { MODKEY|ControlMask,           XK_Right,        movetotag,      {.i = +1} },
+    { Mod4Mask|ControlMask,         XK_Left,         movetotag,      {.i = -1} },
+    { Mod4Mask|ControlMask,         XK_Right,        movetotag,      {.i = +1} },
+    { MODKEY|ControlMask,           XK_bracketleft,  movetotag,      {.i = -1} },
+    { MODKEY|ControlMask,           XK_bracketright, movetotag,      {.i = +1} },
+    { Mod4Mask|ControlMask,         XK_bracketleft,  movetotag,      {.i = -1} },
+    { Mod4Mask|ControlMask,         XK_bracketright, movetotag,      {.i = +1} },
+
+    /* Перемещение окна на соседний стол с переходом ЧЕРЕЗ SHIFT */
+    { MODKEY|ShiftMask,             XK_Left,         movetotag,      {.i = -1} },
+    { MODKEY|ShiftMask,             XK_Right,        movetotag,      {.i = +1} },
+    { Mod4Mask|ShiftMask,           XK_Left,         movetotag,      {.i = -1} },
+    { Mod4Mask|ShiftMask,           XK_Right,        movetotag,      {.i = +1} },
+    { MODKEY|ShiftMask,             XK_bracketleft,  movetotag,      {.i = -1} },
+    { MODKEY|ShiftMask,             XK_bracketright, movetotag,      {.i = +1} },
+    { Mod4Mask|ShiftMask,           XK_bracketleft,  movetotag,      {.i = -1} },
+    { Mod4Mask|ShiftMask,           XK_bracketright, movetotag,      {.i = +1} },
+
+    /* Перемещение окна без перехода (отправить на соседний стол) */
+    { MODKEY|ControlMask|ShiftMask, XK_Left,         tagcycle,       {.i = -1} },
+    { MODKEY|ControlMask|ShiftMask, XK_Right,        tagcycle,       {.i = +1} },
+    { Mod4Mask|ControlMask|ShiftMask, XK_Left,       tagcycle,       {.i = -1} },
+    { Mod4Mask|ControlMask|ShiftMask, XK_Right,      tagcycle,       {.i = +1} },
+
     TAGKEYS(XK_1, 0) TAGKEYS(XK_2, 1) TAGKEYS(XK_3, 2)
     TAGKEYS(XK_4, 3) TAGKEYS(XK_5, 4) TAGKEYS(XK_6, 5)
     TAGKEYS(XK_7, 6) TAGKEYS(XK_8, 7) TAGKEYS(XK_9, 8)
+    SUPERTAGKEYS(XK_1, 0) SUPERTAGKEYS(XK_2, 1) SUPERTAGKEYS(XK_3, 2)
+    SUPERTAGKEYS(XK_4, 3) SUPERTAGKEYS(XK_5, 4) SUPERTAGKEYS(XK_6, 5)
+    SUPERTAGKEYS(XK_7, 6) SUPERTAGKEYS(XK_8, 7) SUPERTAGKEYS(XK_9, 8)
     
-    /* 9. Выход */
+    /* 9. Перезапуск и выход */
+    { MODKEY|ShiftMask,    XK_r,      restartwm,      {0} },                 /* Перезапуск vxwm без выхода из сессии */
+    { Mod4Mask|ShiftMask,  XK_r,      restartwm,      {0} },
+    { MODKEY|ControlMask,  XK_r,      restartwm,      {0} },                 /* Перезапуск vxwm через Ctrl (без Shift) */
+    { Mod4Mask|ControlMask, XK_r,     restartwm,      {0} },
     { MODKEY,              XK_F4,     quit,           {0} },
     { MODKEY|ShiftMask,    XK_F4,     spawn,          {.v = powercmd } },    /* Гибернация/выключение */
 };
 
 /* === Мышь === */
-/* === Мышь === */
 static Button buttons[] = {
     /* Нажатия на панель (если она есть) */
-    { ClkLtSymbol,          0,              Button1, setlayout,      {0} },
+    { ClkLtSymbol,          0,                  Button1, setlayout,          {0} },
     
     /* Управление окнами (Над окном) */
-    { ClkClientWin,         MODKEY,         Button1, movemouse,      {0} }, /* Alt + ЛКМ = Таскать окно */
-    { ClkClientWin,         MODKEY,         Button3, resizemouse,    {0} }, /* Alt + ПКМ = Менять размер окна */
-    { ClkClientWin,         MODKEY|ShiftMask, Button2, togglefloating, {0} }, /* Alt + Shift + Колесико = Сделать плавающим */
+    { ClkClientWin,         MODKEY,             Button1, movemouse,          {0} }, /* Alt + ЛКМ = Таскать окно */
+    { ClkClientWin,         Mod4Mask,           Button1, movemouse,          {0} }, /* Super + ЛКМ = Таскать окно */
+    { ClkClientWin,         MODKEY,             Button3, resizemouse,        {0} }, /* Alt + ПКМ = Менять размер окна */
+    { ClkClientWin,         Mod4Mask,           Button3, resizemouse,        {0} }, /* Super + ПКМ = Менять размер окна */
+    { ClkClientWin,         MODKEY|ShiftMask,   Button2, togglefloating,     {0} }, /* Alt + Shift + Колесико = Сделать плавающим */
+    { ClkClientWin,         Mod4Mask|ShiftMask, Button2, togglefloating,     {0} }, /* Super + Shift + Колесико = Сделать плавающим */
     
     /* Управление холстом (Canvas) */
-    /* Теперь Alt + Клик колесиком тянет холст, даже если ты над окном! */
-    { ClkClientWin,         MODKEY,         Button2, manuallymovecanvas, {0} },
-    /* И то же самое, если кликаешь по пустому фону */
-    { ClkRootWin,           MODKEY,         Button2, manuallymovecanvas, {0} },
+    /* Mod + Клик колесиком тянет холст (над окном и на фоне) */
+    { ClkClientWin,         MODKEY,             Button2, manuallymovecanvas, {0} },
+    { ClkClientWin,         Mod4Mask,           Button2, manuallymovecanvas, {0} },
+    { ClkRootWin,           MODKEY,             Button2, manuallymovecanvas, {0} },
+    { ClkRootWin,           Mod4Mask,           Button2, manuallymovecanvas, {0} },
+
+    /* Масштабирование холста: Mod + колесико мыши (только в режиме холста) */
+    /* Alt + колесико */
+    { ClkRootWin,           MODKEY,             Button4, zoomcanvas,         {.i = +1} },
+    { ClkRootWin,           MODKEY,             Button5, zoomcanvas,         {.i = -1} },
+    { ClkClientWin,         MODKEY,             Button4, zoomcanvas,         {.i = +1} },
+    { ClkClientWin,         MODKEY,             Button5, zoomcanvas,         {.i = -1} },
+    /* Super + колесико */
+    { ClkRootWin,           Mod4Mask,           Button4, zoomcanvas,         {.i = +1} },
+    { ClkRootWin,           Mod4Mask,           Button5, zoomcanvas,         {.i = -1} },
+    { ClkClientWin,         Mod4Mask,           Button4, zoomcanvas,         {.i = +1} },
+    { ClkClientWin,         Mod4Mask,           Button5, zoomcanvas,         {.i = -1} },
 };

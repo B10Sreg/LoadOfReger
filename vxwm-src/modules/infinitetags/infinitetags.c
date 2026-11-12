@@ -1,3 +1,5 @@
+#include <math.h>
+
 int
 getcurrenttag(Monitor *m) {
     unsigned int i;
@@ -7,6 +9,9 @@ getcurrenttag(Monitor *m) {
 
 void
 homecanvas(const Arg *arg) {
+    if (!selmon || selmon->lt[selmon->sellt]->arrange != NULL)
+        return;
+
     Client *c;
     int tagidx = getcurrenttag(selmon);
     int cx = selmon->canvas[tagidx].cx;
@@ -14,16 +19,129 @@ homecanvas(const Arg *arg) {
     
     for (c = selmon->clients; c; c = c->next) {
         if (c->tags & (1 << tagidx)) {
+            if (c->saved_cw > 0 && c->saved_ch > 0) {
+                c->w = c->saved_cw;
+                c->h = c->saved_ch;
+            }
             c->x -= cx;
             c->y -= cy;
-            XMoveWindow(dpy, c->win, c->x, c->y);
+            XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+            configure(c);
         }
     }
     
     selmon->canvas[tagidx].cx = 0;
     selmon->canvas[tagidx].cy = 0;
+    selmon->canvas[tagidx].scale = 1.0f;
     drawbar(selmon); 
-    XFlush(dpy);
+    XSync(dpy, False);
+}
+
+void
+zoomcanvas(const Arg *arg)
+{
+    if (!selmon)
+        return;
+
+    /* Зум камеры работает ТОЛЬКО в режиме холста (плавающий режим, arrange == NULL) */
+    if (selmon->lt[selmon->sellt]->arrange != NULL)
+        return;
+
+    if (selmon->sel && selmon->sel->isfullscreen)
+        return;
+
+    int tagidx = getcurrenttag(selmon);
+    float old_scale = selmon->canvas[tagidx].scale;
+    if (old_scale <= 0.05f)
+        old_scale = 1.0f;
+
+    float new_scale = old_scale;
+
+    if (arg && arg->i > 0) {
+        /* Zoom in (приближение камеры к холсту) */
+        new_scale = old_scale * 1.25f;
+    } else if (arg && arg->i < 0) {
+        /* Zoom out (отдаление камеры от холста) */
+        new_scale = old_scale / 1.25f;
+    } else {
+        /* Reset zoom to 100% (1.0) */
+        new_scale = 1.0f;
+    }
+
+    /* Clamp zoom range between 0.25x and 3.0x */
+    if (new_scale < 0.25f)
+        new_scale = 0.25f;
+    if (new_scale > 3.0f)
+        new_scale = 3.0f;
+
+    if (fabsf(new_scale - old_scale) < 0.005f)
+        return;
+
+    /* Pivot point: pointer position if on monitor, else center of screen */
+    int ox = selmon->wx + selmon->ww / 2;
+    int oy = selmon->wy + selmon->wh / 2;
+
+    Window dummy;
+    int px, py, di;
+    unsigned int dui;
+    if (XQueryPointer(dpy, root, &dummy, &dummy, &px, &py, &di, &di, &dui)) {
+        if (px >= selmon->wx && px < selmon->wx + selmon->ww &&
+            py >= selmon->wy && py < selmon->wy + selmon->wh) {
+            ox = px;
+            oy = py;
+        }
+    }
+
+    float ratio = new_scale / old_scale;
+
+    Client *c;
+    for (c = selmon->clients; c; c = c->next) {
+        if (ISVISIBLE(c)) {
+            if (c->saved_cw <= 0 || c->saved_ch <= 0) {
+                c->saved_cw = (int)roundf(c->w / old_scale);
+                c->saved_ch = (int)roundf(c->h / old_scale);
+                c->saved_cx = c->x + selmon->canvas[tagidx].cx;
+                c->saved_cy = c->y + selmon->canvas[tagidx].cy;
+                c->was_on_canvas = 1;
+            }
+
+            int win_cx = c->x + (c->w + 2 * c->bw) / 2;
+            int win_cy = c->y + (c->h + 2 * c->bw) / 2;
+
+            int n_cx = ox + (int)roundf((win_cx - ox) * ratio);
+            int n_cy = oy + (int)roundf((win_cy - oy) * ratio);
+
+            int nw, nh;
+            if (fabsf(new_scale - 1.0f) < 0.01f) {
+                nw = c->saved_cw;
+                nh = c->saved_ch;
+            } else {
+                nw = (int)roundf(c->saved_cw * new_scale);
+                nh = (int)roundf(c->saved_ch * new_scale);
+            }
+
+            if (nw < 60) nw = 60;
+            if (nh < 40) nh = 40;
+
+            int nx = n_cx - (nw + 2 * c->bw) / 2;
+            int ny = n_cy - (nh + 2 * c->bw) / 2;
+
+            c->x = nx;
+            c->y = ny;
+            c->w = nw;
+            c->h = nh;
+
+            XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+            configure(c);
+        }
+    }
+
+    selmon->canvas[tagidx].cx = ox + (int)roundf((selmon->canvas[tagidx].cx - ox) * ratio);
+    selmon->canvas[tagidx].cy = oy + (int)roundf((selmon->canvas[tagidx].cy - oy) * ratio);
+    selmon->canvas[tagidx].scale = new_scale;
+
+    drawbar(selmon);
+    XSync(dpy, False);
 }
 
 void
@@ -128,12 +246,18 @@ save_canvas_positions(Monitor *m) {
     m->canvas[tagidx].saved_cx = m->canvas[tagidx].cx;
     m->canvas[tagidx].saved_cy = m->canvas[tagidx].cy;
 
+    float scale = m->canvas[tagidx].scale;
+    if (scale <= 0.05f)
+        scale = 1.0f;
+
     for (c = m->clients; c; c = c->next) {
         if (ISVISIBLE(c)) {
             c->saved_cx = c->x + m->canvas[tagidx].cx;
             c->saved_cy = c->y + m->canvas[tagidx].cy;
-            c->saved_cw = c->w;
-            c->saved_ch = c->h;
+            if (fabsf(scale - 1.0f) < 0.01f || c->saved_cw <= 0) {
+                c->saved_cw = (int)roundf(c->w / scale);
+                c->saved_ch = (int)roundf(c->h / scale);
+            }
             c->was_on_canvas = 1;
         }
     }
@@ -147,6 +271,10 @@ restore_canvas_positions(Monitor *m) {
     m->canvas[tagidx].cx = m->canvas[tagidx].saved_cx;
     m->canvas[tagidx].cy = m->canvas[tagidx].saved_cy;
 
+    float scale = m->canvas[tagidx].scale;
+    if (scale <= 0.05f)
+        scale = 1.0f;
+
     for (c = m->clients; c; c = c->next) {
         if (ISVISIBLE(c) && c->was_on_canvas) {
             c->isfloating = 1;
@@ -156,8 +284,23 @@ restore_canvas_positions(Monitor *m) {
 
             c->x = target_x;
             c->y = target_y;
-            c->w = c->saved_cw;
-            c->h = c->saved_ch;
+            if (c->saved_cw > 0 && c->saved_ch > 0) {
+                if (fabsf(scale - 1.0f) < 0.01f) {
+                    c->w = c->saved_cw;
+                    c->h = c->saved_ch;
+                } else {
+                    c->w = (int)roundf(c->saved_cw * scale);
+                    c->h = (int)roundf(c->saved_ch * scale);
+                }
+            } else {
+                if (c->w <= 0) c->w = 640;
+                if (c->h <= 0) c->h = 480;
+                c->saved_cw = (int)roundf(c->w / scale);
+                c->saved_ch = (int)roundf(c->h / scale);
+            }
+
+            if (c->w < 60) c->w = 60;
+            if (c->h < 40) c->h = 40;
 
             XMoveResizeWindow(dpy, c->win, target_x, target_y, c->w, c->h);
 

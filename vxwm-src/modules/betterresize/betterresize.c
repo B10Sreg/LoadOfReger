@@ -113,7 +113,7 @@ resizemouse(const Arg *arg)
 #if LOCK_MOVE_RESIZE_REFRESH_RATE
     Time lasttime = 0;
 #endif
-    if (!(c = selmon->sel) || c->isfullscreen)
+    if (!(c = selmon->sel) || c->isfullscreen || c->isunmovable)
         return;
 
     restack(selmon);

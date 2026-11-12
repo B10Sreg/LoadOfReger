@@ -61,3 +61,9 @@ pkill -f 'session-save\.sh --watch'
     "$VXWM_DIR/session-restore.sh"
     exec "$VXWM_DIR/session-save.sh" --watch
 ) &
+
+# 6. Скриншотер: держим flameshot в фоне для мгновенного вызова по Print
+if command -v flameshot >/dev/null 2>&1; then
+    pgrep -x flameshot >/dev/null 2>&1 || flameshot &
+fi
+

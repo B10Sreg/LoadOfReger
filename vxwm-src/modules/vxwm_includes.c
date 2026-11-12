@@ -59,3 +59,8 @@
 #if TAG_SLIDE
 #include "tagslide/tagslide.c"
 #endif
+
+#if WORKSPACE_SWITCHER
+#include "workspaceswitcher/workspaceswitcher.c"
+#endif
+

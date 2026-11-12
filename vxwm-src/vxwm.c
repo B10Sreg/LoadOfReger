@@ -132,7 +132,7 @@ struct Client {
 	int basew, baseh, incw, inch, maxw, maxh, minw, minh, hintsvalid;
 	int bw, oldbw;
 	unsigned int tags;
-	int isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen;
+	int isfixed, isfloating, isurgent, neverfocus, oldstate, isfullscreen, isunmovable;
 	/* Доля окна в своей колонке при тайлинге. 1.0 -- как у всех, 2.0 --
 	 * вдвое выше соседей. Меняется перетаскиванием границы между окнами и
 	 * setcfact; раскладка делит высоту пропорционально этим числам, а не
@@ -177,6 +177,7 @@ typedef struct {
 typedef struct {
     int cx, cy;
     int saved_cx, saved_cy;
+    float scale;
 } CanvasOffset;
 #endif
 
@@ -214,6 +215,7 @@ typedef struct {
 	const char *title;
 	unsigned int tags;
 	int isfloating;
+	int isunmovable;
 	int monitor;
 } Rule;
 
@@ -270,6 +272,8 @@ static void resize(Client *c, int x, int y, int w, int h, int interact);
 static void resizeclient(Client *c, int x, int y, int w, int h);
 static void resizemouse(const Arg *arg);
 static void restack(Monitor *m);
+static void restartwm(const Arg *arg);
+static void sighup(int unused);
 static void run(void);
 static void scan(void);
 static int sendevent(Client *c, Atom proto);
@@ -285,6 +289,10 @@ static void seturgent(Client *c, int urg);
 static void showhide(Client *c);
 static void spawn(const Arg *arg);
 static void tag(const Arg *arg);
+static void movetotag(const Arg *arg);
+static void movetoexacttag(const Arg *arg);
+static void tagcycle(const Arg *arg);
+static void viewadjacent(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *m);
 static void togglebar(const Arg *arg);
@@ -372,6 +380,7 @@ applyrules(Client *c)
 
 	/* rule matching */
 	c->isfloating = 0;
+	c->isunmovable = 0;
 	c->tags = 0;
 	XGetClassHint(dpy, c->win, &ch);
 	class    = ch.res_class ? ch.res_class : broken;
@@ -384,6 +393,7 @@ applyrules(Client *c)
 		&& (!r->instance || strstr(instance, r->instance)))
 		{
 			c->isfloating = r->isfloating;
+			c->isunmovable = r->isunmovable;
 			c->tags |= r->tags;
 			for (m = mons; m && m->num != r->monitor; m = m->next);
 			if (m)
@@ -624,6 +634,21 @@ clientmessage(XEvent *e)
 	if (ebclientmessage(cme))
 		return;
 #endif
+#if EWMH_TAGS
+	if (cme->message_type == netatom[NetCurrentDesktop]) {
+		if (cme->data.l[0] >= 0 && cme->data.l[0] < LENGTH(tags)) {
+			Arg a = {.ui = 1 << cme->data.l[0]};
+			view(&a);
+		}
+		return;
+	} else if (cme->message_type == netatom[NetDesktopNum]) {
+		if (c && cme->data.l[0] >= 0 && cme->data.l[0] < LENGTH(tags)) {
+			Arg a = {.ui = 1 << cme->data.l[0]};
+			tag(&a);
+		}
+		return;
+	}
+#endif
 	if (!c)
 		return;
 	if (cme->message_type == netatom[NetWMState]) {
@@ -779,6 +804,7 @@ createmon(void)
   for (i = 0; i < LENGTH(tags); i++) {
       m->canvas[i].cx = 0;
       m->canvas[i].cy = 0;
+      m->canvas[i].scale = 1.0f;
   }
 #endif
 	return m;
@@ -1177,6 +1203,15 @@ grabkeys(void)
 							 root, True,
 							 GrabModeAsync, GrabModeAsync);
 		XFree(syms);
+
+		XUngrabButton(dpy, AnyButton, AnyModifier, root);
+		for (i = 0; i < LENGTH(buttons); i++)
+			if (buttons[i].click == ClkRootWin)
+				for (j = 0; j < LENGTH(modifiers); j++)
+					XGrabButton(dpy, buttons[i].button,
+						buttons[i].mask | modifiers[j],
+						root, False, BUTTONMASK,
+						GrabModeAsync, GrabModeSync, None, None);
 	}
 }
 
@@ -1288,6 +1323,13 @@ manage(Window w, XWindowAttributes *wa)
   c->sfw = c->w;
   c->sfh = c->h;
 #endif
+#if INFINITE_TAGS
+  c->saved_cx = c->x;
+  c->saved_cy = c->y;
+  c->saved_cw = c->w > 0 ? c->w : 640;
+  c->saved_ch = c->h > 0 ? c->h : 480;
+  c->was_on_canvas = 0;
+#endif
 	updatetitle(c);
 	if (XGetTransientForHint(dpy, w, &trans) && (t = wintoclient(trans))) {
 		c->mon = t->mon;
@@ -1320,6 +1362,11 @@ manage(Window w, XWindowAttributes *wa)
   c->x = c->mon->wx + (c->mon->ww - WIDTH(c)) / 2;
   c->y = c->mon->wy + (c->mon->wh - HEIGHT(c)) / 2;
 #endif
+	if (c->isunmovable) {
+		c->isfloating = 1;
+		c->x = c->mon->wx + (c->mon->ww - WIDTH(c)) / 2;
+		c->y = c->mon->wy + (c->mon->wh - HEIGHT(c)) / 2;
+	}
 	XSelectInput(dpy, w, EnterWindowMask|FocusChangeMask|PropertyChangeMask|StructureNotifyMask);
 	grabbuttons(c, 0);
 	if (!c->isfloating)
@@ -1424,7 +1471,7 @@ movemouse(const Arg *arg)
 #endif //LOCK_MOVE_RESIZE_REFRESH_RATE
 	if (!(c = selmon->sel))
 		return;
-	if (c->isfullscreen) /* no support moving fullscreen windows by mouse */
+	if (c->isfullscreen || c->isunmovable) /* no moving fullscreen or unmovable windows by mouse */
 		return;
 	restack(selmon);
 	ocx = c->x;
@@ -1655,9 +1702,25 @@ propertynotify(XEvent *e)
 	}
 }
 
+static int restart = 0;
+
 void
 quit(const Arg *arg)
 {
+	running = 0;
+}
+
+void
+restartwm(const Arg *arg)
+{
+	restart = 1;
+	running = 0;
+}
+
+void
+sighup(int unused)
+{
+	restart = 1;
 	running = 0;
 }
 
@@ -1790,6 +1853,9 @@ restack(Monitor *m)
 		return;
 	if (m->sel->isfloating || !m->lt[m->sellt]->arrange)
 		XRaiseWindow(dpy, m->sel->win);
+	for (c = m->clients; c; c = c->next)
+		if (c->isunmovable && ISVISIBLE(c))
+			XRaiseWindow(dpy, c->win);
 	if (m->lt[m->sellt]->arrange) {
 		wc.stack_mode = Below;
 		wc.sibling = m->barwin;
@@ -1862,12 +1928,20 @@ scan(void)
 			if (!XGetWindowAttributes(dpy, wins[i], &wa)
 			|| wa.override_redirect || XGetTransientForHint(dpy, wins[i], &d1))
 				continue;
+#if EXTERNAL_BAR
+			if (isdock(wins[i]))
+				continue;
+#endif
 			if (wa.map_state == IsViewable || getstate(wins[i]) == IconicState)
 				manage(wins[i], &wa);
 		}
 		for (i = 0; i < num; i++) { /* now the transients */
 			if (!XGetWindowAttributes(dpy, wins[i], &wa))
 				continue;
+#if EXTERNAL_BAR
+			if (isdock(wins[i]))
+				continue;
+#endif
 			if (XGetTransientForHint(dpy, wins[i], &d1)
 			&& (wa.map_state == IsViewable || getstate(wins[i]) == IconicState))
 				manage(wins[i], &wa);
@@ -2054,6 +2128,9 @@ setup(void)
 	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
 	sa.sa_handler = SIG_IGN;
 	sigaction(SIGCHLD, &sa, NULL);
+
+	/* SIGHUP restarts vxwm in-place without exiting session */
+	signal(SIGHUP, sighup);
 
 	/* clean up any zombies (inherited from .xinitrc etc) immediately */
 	while (waitpid(-1, NULL, WNOHANG) > 0);
@@ -2270,6 +2347,94 @@ tag(const Arg *arg)
 }
 
 void
+movetotag(const Arg *arg)
+{
+	if (!selmon->sel || !arg || arg->i == 0)
+		return;
+	if ((selmon->sel->tags & TAGMASK) == TAGMASK)
+		return;
+
+	Client *c = selmon->sel;
+	int cur = getcurrenttag(selmon);
+	int ntags = LENGTH(tags);
+	int target = (cur + arg->i) % ntags;
+	if (target < 0)
+		target += ntags;
+
+	unsigned int newtag = 1 << target;
+	if (newtag == selmon->tagset[selmon->seltags])
+		return;
+
+	Arg a = { .ui = newtag };
+	tag(&a);
+	view(&a);
+	focus(c);
+	restack(selmon);
+}
+
+void
+movetoexacttag(const Arg *arg)
+{
+	if (!selmon->sel || !arg || !(arg->ui & TAGMASK))
+		return;
+	if ((selmon->sel->tags & TAGMASK) == TAGMASK)
+		return;
+
+	unsigned int newtag = arg->ui & TAGMASK;
+	if (newtag == selmon->tagset[selmon->seltags])
+		return;
+
+	Client *c = selmon->sel;
+	Arg a = { .ui = newtag };
+	tag(&a);
+	view(&a);
+	focus(c);
+	restack(selmon);
+}
+
+void
+tagcycle(const Arg *arg)
+{
+	if (!selmon->sel || !arg || arg->i == 0)
+		return;
+	if ((selmon->sel->tags & TAGMASK) == TAGMASK)
+		return;
+
+	int cur = getcurrenttag(selmon);
+	int ntags = LENGTH(tags);
+	int target = (cur + arg->i) % ntags;
+	if (target < 0)
+		target += ntags;
+
+	unsigned int newtag = 1 << target;
+	if (newtag == selmon->tagset[selmon->seltags])
+		return;
+
+	Arg a = { .ui = newtag };
+	tag(&a);
+}
+
+void
+viewadjacent(const Arg *arg)
+{
+	if (!arg || arg->i == 0)
+		return;
+
+	int cur = getcurrenttag(selmon);
+	int ntags = LENGTH(tags);
+	int target = (cur + arg->i) % ntags;
+	if (target < 0)
+		target += ntags;
+
+	unsigned int newtag = 1 << target;
+	if (newtag == selmon->tagset[selmon->seltags])
+		return;
+
+	Arg a = { .ui = newtag };
+	view(&a);
+}
+
+void
 tagmon(const Arg *arg)
 {
 	if (!selmon->sel || !mons->next)
@@ -2349,7 +2514,7 @@ togglefloating(const Arg *arg)
 {
 	if (!selmon->sel)
 		return;
-	if (selmon->sel->isfullscreen) /* no support for fullscreen windows */
+	if (selmon->sel->isfullscreen || selmon->sel->isunmovable) /* no support for fullscreen or unmovable windows */
 		return;
 	selmon->sel->isfloating = !selmon->sel->isfloating || selmon->sel->isfixed;
 	if (selmon->sel->isfloating)
@@ -2415,6 +2580,9 @@ unmanage(Client *c, int destroyed)
 
 	detach(c);
 	detachstack(c);
+#if WORKSPACE_SWITCHER
+	workspaceswitcher_invalidate(c->tags);
+#endif
 	if (!destroyed) {
 		wc.border_width = c->oldbw;
 		XGrabServer(dpy); /* avoid race conditions */
@@ -2724,6 +2892,10 @@ view(const Arg *arg)
     }
 #endif
 
+#if WORKSPACE_SWITCHER
+    workspaceswitcher_snapshot();
+#endif
+
 #if TAG_SLIDE
     /* Направление считаем до переключения: с меньшего тега на больший лента
      * тегов листается вниз (вправо у горизонтального бара), обратно -- вверх
@@ -2784,6 +2956,10 @@ view(const Arg *arg)
 
     if ((arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
         return;
+
+#if WORKSPACE_SWITCHER
+    workspaceswitcher_snapshot();
+#endif
 
 #if TAG_SLIDE
     /* См. комментарий в первой ветке view(): направление зависит от того,
@@ -2943,10 +3119,10 @@ main(int argc, char *argv[])
 	if (pledge("stdio rpath proc exec", NULL) == -1)
 		die("pledge");
 #endif /* __OpenBSD__ */
-	scan();
 #if EXTERNAL_BAR
 	scandocks();
 #endif
+	scan();
 #if AUTOSTART
   if (!(argc == 2 && !strcmp("-ignoreautostart", argv[1])))
     runautostart();
@@ -2954,5 +3130,9 @@ main(int argc, char *argv[])
 	run();
 	cleanup();
 	XCloseDisplay(dpy);
+	if (restart) {
+		char *const args[] = { argv[0], "-ignoreautostart", NULL };
+		execvp(argv[0], args);
+	}
 	return EXIT_SUCCESS;
 }

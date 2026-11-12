@@ -191,6 +191,22 @@ def apply_theme(cfg, r: Runner):
         if src.exists():
             r.write(dest, src.read_text())
 
+    # Регистрация пользовательского скрипта поиска для Rofi
+    rofi_scripts = CONFIG_HOME / "rofi" / "scripts"
+    rofi_scripts.mkdir(parents=True, exist_ok=True)
+    search_py = RICE.parent / "search.py"
+    search_target = rofi_scripts / "search"
+    if search_py.exists() and not r.dry:
+        if search_target.is_symlink() or search_target.exists():
+            try:
+                search_target.unlink()
+            except OSError:
+                pass
+        try:
+            search_target.symlink_to(search_py)
+        except OSError:
+            pass
+
     with palette_path.open("rb") as fh:
         palette = tomllib.load(fh)
     apply_bar_colors(palette, r)
@@ -444,6 +460,11 @@ def apply_compositor(cfg, r: Runner):
         "BACKEND": c.get("backend", "glx"),
         "USE_DAMAGE": use_damage,
         "ANIMATIONS": b("animations"),
+        "ANIMATION_STIFFNESS_IN_TAG": c.get("animation_stiffness_in_tag", c.get("animation_stiffness", 280.0)),
+        "ANIMATION_STIFFNESS_TAG_CHANGE": c.get("animation_stiffness_tag_change", c.get("animation_stiffness", 280.0)),
+        "ANIMATION_WINDOW_MASS": c.get("animation_window_mass", c.get("animation_mass", 0.4)),
+        "ANIMATION_DAMPENING": c.get("animation_dampening", 18.0),
+        "ANIMATION_CLAMPING": b("animation_clamping") if "animation_clamping" in c else "true",
         "OPEN_ANIMATION": c.get("open_animation", "zoom"),
         "CLOSE_ANIMATION": c.get("close_animation", "slide-down"),
         "SHADOW": b("shadow"),

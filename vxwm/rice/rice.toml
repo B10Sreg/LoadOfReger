@@ -36,6 +36,10 @@ use_damage = true
 # трогать её без записи экрана бессмысленно, на глаз разница между "плавно" и
 # "дёргается" не ловится.
 animations = true
+animation_stiffness = 300.0
+animation_dampening = 16.0
+animation_mass = 0.3
+animation_clamping = true
 # Чем рисуется появление и исчезновение окна. Само листание тегов от них не
 # зависит (его рисует пружина picom, см. templates/picom.conf.tmpl, раздел
 # "Смена тега") -- но окна нового тега мапятся заново, поэтому open_animation

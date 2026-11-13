@@ -10,7 +10,7 @@
 [![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793D1?logo=arch-linux&logoColor=white)](https://archlinux.org)
 [![CI](https://github.com/B10Sreg/LoadOfReger/actions/workflows/ci.yml/badge.svg)](https://github.com/B10Sreg/LoadOfReger/actions/workflows/ci.yml)
 
-[Установка](#установка) · [NVIDIA](docs/nvidia.md) · [Хоткеи](docs/keybindings.md) · [Как устроено](#как-это-устроено) · [English](README.en.md)
+[Скриншоты](docs/screenshots.md) · [Установка](#установка) · [NVIDIA](docs/nvidia.md) · [Хоткеи](docs/keybindings.md) · [Как устроено](#как-это-устроено) · [English](README.en.md)
 
 </div>
 
@@ -33,8 +33,11 @@
 
 ## Скриншоты
 
-> Положи сюда свои: `docs/screenshots/`. Пять тем идут в комплекте, все —
-> с обоями и общей палитрой.
+[![Рабочий стол Load of Reger](docs/screenshots/01-desktop-fastfetch.png)](docs/screenshots.md)
+
+> 📸 **[Смотреть полную галерею скриншотов](docs/screenshots.md)** (тайлинг, сплит окон, рабочие столы).
+>
+> Пять тем идут в комплекте, все — с обоями и общей палитрой:
 
 | Тема | Описание | Фон | Акцент |
 |---|---|---|---|

@@ -10,7 +10,7 @@ that the whole system unfolds from.**
 [![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793D1?logo=arch-linux&logoColor=white)](https://archlinux.org)
 [![CI](https://github.com/B10Sreg/LoadOfReger/actions/workflows/ci.yml/badge.svg)](https://github.com/B10Sreg/LoadOfReger/actions/workflows/ci.yml)
 
-[Install](#install) · [NVIDIA](docs/nvidia.en.md) · [Keybindings](docs/keybindings.md) · [How it works](#how-it-works) · [Русский](README.md)
+[Screenshots](docs/screenshots.md) · [Install](#install) · [NVIDIA](docs/nvidia.en.md) · [Keybindings](docs/keybindings.md) · [How it works](#how-it-works) · [Русский](README.md)
 
 </div>
 
@@ -34,6 +34,12 @@ yesterday's windows.
 | **picom** (`picom/`) | FT-Labs build patched against window "teleporting" while sliding tags, plus a watchdog that restarts the compositor when it crashes. |
 | **sddm** (`sddm/`) | Login screen theme, recolored together with the rice. |
 | **session** (`vxwm/session-*.sh`) | Snapshots open windows and brings them back on the next login. Hibernation brings back browser tabs and unsaved buffers too. |
+
+## Screenshots
+
+[![Load of Reger Desktop](docs/screenshots/01-desktop-fastfetch.png)](docs/screenshots.md)
+
+> 📸 **[View full screenshots gallery](docs/screenshots.md)**
 
 ## Themes
 

@@ -643,12 +643,13 @@ link_scripts() {
     link "$REPO/vxwm/rice/apply.py"  vxwm-rice-apply
     link "$REPO/vxwm/vxwm-search.sh" vxwm-search
     link "$REPO/vxwm/vxwm-search.sh" vxwm-omni
+    link "$REPO/vxwm/vxwm-launcher"  vxwm-launcher
 
     # Автозапуск: vxwm зовёт его по фиксированному пути из config.def.h.
     run ln -sfn "$REPO/vxwm/autostart.sh" "$CFG/vxwm/autostart.sh"
     run mkdir -p "$CFG/rofi/scripts"
     run ln -sfn "$REPO/vxwm/search.py" "$CFG/rofi/scripts/search"
-    ok "vxwm-theme.sh, vxwm-powermenu.sh, vxwm-power.sh, vxwm-scratchpad.sh, vxwm-session, vxwm-rice-apply, vxwm-search"
+    ok "vxwm-theme.sh, vxwm-powermenu.sh, vxwm-power.sh, vxwm-scratchpad.sh, vxwm-session, vxwm-rice-apply, vxwm-search, vxwm-launcher"
     ok "$CFG/vxwm/autostart.sh"
     ok "$CFG/rofi/scripts/search"
 }
